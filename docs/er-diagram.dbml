@@ -1,0 +1,58 @@
+// Schedula Project — ER Diagram
+// Paste this at https://dbdiagram.io → New Diagram → paste → Export PNG/PDF
+
+Table USER {
+  id int [pk, increment]
+  email varchar [unique, not null]
+  phone varchar [unique]
+  password_hash varchar
+  role enum [not null, note: 'DOCTOR or PATIENT']
+  google_oauth_id varchar [note: 'for Google OAuth login']
+  is_verified boolean [default: false]
+  created_at datetime [default: `now()`]
+}
+
+Table PATIENT {
+  id int [pk, increment]
+  user_id int [unique, not null, ref: > USER.id]
+  full_name varchar [not null]
+  date_of_birth date
+  gender enum
+  address varchar
+  emergency_contact varchar
+}
+
+Table DOCTOR {
+  id int [pk, increment]
+  user_id int [unique, not null, ref: > USER.id]
+  full_name varchar [not null]
+  specialization varchar [not null]
+  experience_years int
+  qualification varchar
+  consultation_fee decimal
+  verification_status enum [default: 'PENDING', note: 'PENDING | APPROVED | REJECTED']
+  verification_token varchar
+  bio text
+}
+
+Table AVAILABILITY {
+  id int [pk, increment]
+  doctor_id int [not null, ref: > DOCTOR.id]
+  day_of_week enum [not null, note: 'MON to SUN']
+  start_time time [not null]
+  end_time time [not null]
+  slot_duration_minutes int [default: 30]
+  max_appointments int [default: 1, note: 'elastic scheduling capacity']
+  is_active boolean [default: true]
+}
+
+Table APPOINTMENT {
+  id int [pk, increment]
+  patient_id int [not null, ref: > PATIENT.id]
+  doctor_id int [not null, ref: > DOCTOR.id]
+  availability_id int [not null, ref: > AVAILABILITY.id]
+  appointment_time datetime [not null]
+  status enum [default: 'BOOKED', note: 'BOOKED | CONFIRMED | CANCELLED | RESCHEDULED | COMPLETED']
+  reason varchar
+  booked_at datetime [default: `now()`]
+}
