@@ -3,9 +3,21 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 
 export const metadata = { title: "Sign in — Medrella" };
 
-export default function SignInPage() {
+export default async function SignInPage({
+  searchParams,
+}: {
+  searchParams: Promise<{ expired?: string }>;
+}) {
+  const { expired } = await searchParams;
+
   return (
     <div className="mx-auto max-w-md py-6">
+      {expired && (
+        <p className="mb-4 rounded-lg bg-amber-50 p-3 text-sm text-amber-800">
+          Your session is no longer valid. Please sign in again.
+        </p>
+      )}
+
       <Card>
         <CardHeader>
           <CardTitle className="text-xl">Welcome back</CardTitle>
