@@ -1,5 +1,8 @@
+import { eq } from "drizzle-orm";
 import { cookies } from "next/headers";
 import { redirect } from "next/navigation";
+import { getDb } from "@/db";
+import { doctors, patients } from "@/db/schema";
 import {
   SESSION_COOKIE,
   signSession,
@@ -39,11 +42,36 @@ export async function requireSession() {
   return session;
 }
 
-/** Guards a dashboard page; sends the user to the dashboard that matches their role. */
+/**
+ * Guards a dashboard page and confirms the profile behind the token still exists.
+ * A session whose doctor/patient row was deleted (for example after a database
+ * reseed) is cleared instead of rendering an empty "ghost" dashboard.
+ */
 export async function requireRole(role: "patient" | "doctor") {
   const session = await requireSession();
   if (session.role !== role) {
     redirect(`/dashboard/${session.role}`);
   }
+
+  const db = getDb();
+  const rows =
+    role === "doctor"
+      ? await db
+          .select({ id: doctors.id })
+          .from(doctors)
+          .where(eq(doctors.id, session.profileId))
+          .limit(1)
+      : await db
+          .select({ id: patients.id })
+          .from(patients)
+          .where(eq(patients.id, session.profileId))
+          .limit(1);
+
+  if (rows.length === 0) {
+    // Cookie writes are not allowed while rendering, so a route handler clears
+    // the stale session before sending the user back to sign in.
+    redirect("/api/session/clear");
+  }
+
   return session;
 }
