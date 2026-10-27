@@ -8,8 +8,9 @@ appear in their dashboard instantly.
 
 - **Authentication** — email/password signup and signin with role selection (patient / doctor), JWT session in an httpOnly cookie, role-guarded dashboards via middleware
 - **Doctor directory** — search by name or specialization, profile pages with fees, experience and weekly availability
-- **Live slot availability** — slots are generated from each doctor's availability windows (30-minute intervals), booked slots and past times are removed automatically
-- **Booking flow** — slot selection → optional reason → confirmation; bookings are re-validated server-side so two patients cannot take the same slot
+- **Doctor availability management** — doctors add or remove their own weekly windows from the dashboard; new doctors are seeded with a default Mon–Fri 09:00–13:00 schedule so they are bookable immediately; windows with upcoming bookings cannot be removed
+- **Live slot availability** — slots are generated from each doctor's availability windows (15/30/45/60-minute intervals), booked slots and past times are removed automatically; all comparisons use clinic time (Asia/Kolkata) so "today" is correct regardless of server time zone
+- **Booking flow** — slot selection → optional reason → confirmation; bookings are re-validated server-side and backed by a partial unique index, so the same slot can never be double-booked
 - **Patient dashboard** — upcoming appointments, booking history, one-click cancel
 - **Doctor dashboard** — schedule of booked patients with contact details, daily counts, cancel support
 - **Seeded demo data** — 6 doctors across cardiology, dermatology, orthopedics, pediatrics, general medicine and neurology

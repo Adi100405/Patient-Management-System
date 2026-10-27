@@ -1,3 +1,4 @@
+import { sql } from "drizzle-orm";
 import {
   boolean,
   integer,
@@ -7,6 +8,7 @@ import {
   serial,
   text,
   timestamp,
+  uniqueIndex,
 } from "drizzle-orm/pg-core";
 
 export const roleEnum = pgEnum("role", ["patient", "doctor"]);
@@ -67,25 +69,37 @@ export const availability = pgTable("availability", {
   isActive: boolean("is_active").notNull().default(true),
 });
 
-export const appointments = pgTable("appointments", {
-  id: serial("id").primaryKey(),
-  patientId: integer("patient_id")
-    .notNull()
-    .references(() => patients.id, { onDelete: "cascade" }),
-  doctorId: integer("doctor_id")
-    .notNull()
-    .references(() => doctors.id, { onDelete: "cascade" }),
-  availabilityId: integer("availability_id").references(() => availability.id, {
-    onDelete: "set null",
-  }),
-  /** "2026-10-28" */
-  appointmentDate: text("appointment_date").notNull(),
-  /** "10:30" */
-  appointmentTime: text("appointment_time").notNull(),
-  status: appointmentStatusEnum("status").notNull().default("booked"),
-  reason: text("reason"),
-  createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
-});
+export const appointments = pgTable(
+  "appointments",
+  {
+    id: serial("id").primaryKey(),
+    patientId: integer("patient_id")
+      .notNull()
+      .references(() => patients.id, { onDelete: "cascade" }),
+    doctorId: integer("doctor_id")
+      .notNull()
+      .references(() => doctors.id, { onDelete: "cascade" }),
+    availabilityId: integer("availability_id").references(() => availability.id, {
+      onDelete: "set null",
+    }),
+    /** "2026-10-28" */
+    appointmentDate: text("appointment_date").notNull(),
+    /** "10:30" */
+    appointmentTime: text("appointment_time").notNull(),
+    status: appointmentStatusEnum("status").notNull().default("booked"),
+    reason: text("reason"),
+    createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+  },
+  (table) => [
+    /**
+     * A doctor cannot have two active bookings for the same slot. Cancelled
+     * appointments are excluded so the slot becomes bookable again.
+     */
+    uniqueIndex("appointments_booked_slot_unique")
+      .on(table.doctorId, table.appointmentDate, table.appointmentTime)
+      .where(sql`${table.status} = 'booked'`),
+  ],
+);
 
 export type User = typeof users.$inferSelect;
 export type Doctor = typeof doctors.$inferSelect;
