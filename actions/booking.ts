@@ -5,6 +5,7 @@ import { revalidatePath } from "next/cache";
 import { getDb } from "@/db";
 import { appointments, availability } from "@/db/schema";
 import { bookingSchema } from "@/lib/auth";
+import { isUniqueViolation } from "@/lib/db-errors";
 import { requireSession } from "@/lib/session";
 import { availableSlots, dayOfWeekFor } from "@/lib/slots";
 
@@ -62,14 +63,23 @@ export async function bookAppointment(
     return { error: "That slot was just taken. Please choose another time." };
   }
 
-  await db.insert(appointments).values({
-    patientId: session.profileId,
-    doctorId: data.doctorId,
-    availabilityId: slotWindow.id,
-    appointmentDate: data.date,
-    appointmentTime: data.time,
-    reason: data.reason,
-  });
+  try {
+    await db.insert(appointments).values({
+      patientId: session.profileId,
+      doctorId: data.doctorId,
+      availabilityId: slotWindow.id,
+      appointmentDate: data.date,
+      appointmentTime: data.time,
+      reason: data.reason,
+    });
+  } catch (error) {
+    // The partial unique index is the authoritative guard against two patients
+    // racing for the same slot between the read above and this insert.
+    if (isUniqueViolation(error, "appointments_booked_slot_unique")) {
+      return { error: "That slot was just taken. Please choose another time." };
+    }
+    throw error;
+  }
 
   revalidatePath(`/doctors/${data.doctorId}`);
   revalidatePath("/dashboard/patient");

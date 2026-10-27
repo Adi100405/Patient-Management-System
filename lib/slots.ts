@@ -1,5 +1,11 @@
 import type { Availability } from "@/db/schema";
-import { toDateInputValue } from "./utils";
+
+/**
+ * All availability windows and appointment times in this system are clinic-local
+ * wall-clock times. The clinic runs on IST, so "today" and "now" must be resolved
+ * in that time zone rather than the server's (UTC on Vercel).
+ */
+export const CLINIC_TIME_ZONE = "Asia/Kolkata";
 
 /** "09:00" -> minutes since midnight */
 function toMinutes(time: string) {
@@ -11,6 +17,33 @@ function toTime(minutes: number) {
   const h = Math.floor(minutes / 60);
   const m = minutes % 60;
   return `${String(h).padStart(2, "0")}:${String(m).padStart(2, "0")}`;
+}
+
+/** Midnight UTC for a "YYYY-MM-DD" string — deterministic on any server time zone. */
+function utcDate(date: string) {
+  const [y, m, d] = date.split("-").map(Number);
+  return new Date(Date.UTC(y, m - 1, d));
+}
+
+/** Current clinic date ("YYYY-MM-DD") and minutes since clinic midnight. */
+export function clinicNow(instant: Date = new Date()) {
+  const parts = new Intl.DateTimeFormat("en-CA", {
+    timeZone: CLINIC_TIME_ZONE,
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+    hourCycle: "h23",
+  }).formatToParts(instant);
+
+  const get = (type: Intl.DateTimeFormatPartTypes) =>
+    parts.find((part) => part.type === type)?.value ?? "00";
+
+  return {
+    date: `${get("year")}-${get("month")}-${get("day")}`,
+    minutes: Number(get("hour")) * 60 + Number(get("minute")),
+  };
 }
 
 export function buildSlots(window: Pick<Availability, "startTime" | "endTime" | "slotMinutes">) {
@@ -30,25 +63,31 @@ export type DayOption = {
   isToday: boolean;
 };
 
-/** The next `count` days starting today, used for the date picker on a doctor profile. */
+/** The next `count` clinic days starting today, used for the date picker on a doctor profile. */
 export function upcomingDays(count = 7): DayOption[] {
-  const today = new Date();
+  const today = utcDate(clinicNow().date);
   const days: DayOption[] = [];
+
   for (let i = 0; i < count; i++) {
-    const d = new Date(today);
-    d.setDate(today.getDate() + i);
+    const d = new Date(today.getTime() + i * 86_400_000);
     days.push({
-      date: toDateInputValue(d),
-      dayOfWeek: d.getDay(),
-      label: d.toLocaleDateString("en-IN", { weekday: "short", day: "numeric", month: "short" }),
+      date: d.toISOString().slice(0, 10),
+      dayOfWeek: d.getUTCDay(),
+      label: d.toLocaleDateString("en-IN", {
+        weekday: "short",
+        day: "numeric",
+        month: "short",
+        timeZone: "UTC",
+      }),
       isToday: i === 0,
     });
   }
+
   return days;
 }
 
 export function dayOfWeekFor(date: string) {
-  return new Date(`${date}T00:00:00`).getDay();
+  return utcDate(date).getUTCDay();
 }
 
 /** Removes already-booked and past slots so two patients never see the same free slot. */
@@ -58,12 +97,10 @@ export function availableSlots(options: {
   bookedTimes: string[];
 }) {
   const slots = options.windows.flatMap((w) => buildSlots(w));
-  const now = new Date();
-  const todayValue = toDateInputValue(now);
-  const nowMinutes = now.getHours() * 60 + now.getMinutes();
+  const now = clinicNow();
 
   return [...new Set(slots)]
     .filter((slot) => !options.bookedTimes.includes(slot))
-    .filter((slot) => options.date !== todayValue || toMinutes(slot) > nowMinutes)
+    .filter((slot) => options.date !== now.date || toMinutes(slot) > now.minutes)
     .sort();
 }

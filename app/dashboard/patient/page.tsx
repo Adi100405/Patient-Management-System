@@ -7,6 +7,7 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { requireRole } from "@/lib/session";
+import { clinicNow } from "@/lib/slots";
 import { formatDate, formatTime } from "@/lib/utils";
 
 export const dynamic = "force-dynamic";
@@ -38,7 +39,7 @@ export default async function PatientDashboard() {
     .where(eq(appointments.patientId, session.profileId))
     .orderBy(asc(appointments.appointmentDate), asc(appointments.appointmentTime));
 
-  const today = new Date().toISOString().slice(0, 10);
+  const today = clinicNow().date;
   const upcoming = rows.filter((r) => r.status === "booked" && r.date >= today);
   const history = rows.filter((r) => !upcoming.includes(r)).reverse();
 

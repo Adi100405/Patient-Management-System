@@ -25,6 +25,25 @@ export const bookingSchema = z.object({
   reason: z.string().trim().max(300).optional(),
 });
 
+const clockTime = z
+  .string()
+  .regex(/^([01]\d|2[0-3]):[0-5]\d$/, "Use a valid time like 09:30");
+
+export const availabilitySchema = z
+  .object({
+    dayOfWeek: z.coerce.number().int().min(0, "Pick a day").max(6, "Pick a day"),
+    startTime: clockTime,
+    endTime: clockTime,
+    slotMinutes: z.coerce
+      .number()
+      .int()
+      .refine((value) => [15, 30, 45, 60].includes(value), "Slot length must be 15, 30, 45 or 60 minutes"),
+  })
+  .refine((value) => value.startTime < value.endTime, {
+    message: "End time must be after the start time",
+    path: ["endTime"],
+  });
+
 export async function hashPassword(password: string) {
   return bcrypt.hash(password, 10);
 }
