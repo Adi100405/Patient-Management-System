@@ -1,13 +1,13 @@
 import Link from "next/link";
 import { notFound } from "next/navigation";
-import { and, asc, eq } from "drizzle-orm";
+import { and, asc, eq, gte, lte } from "drizzle-orm";
 import { getDb } from "@/db";
 import { appointments, availability, doctors } from "@/db/schema";
 import { Badge } from "@/components/ui/badge";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { SlotPicker } from "@/components/slot-picker";
 import { getSession } from "@/lib/session";
-import { availableSlots, buildSlots, dayOfWeekFor, upcomingDays } from "@/lib/slots";
+import { availableSlots, buildSlots, upcomingDays } from "@/lib/slots";
 import { cn, formatCurrency, formatDate, formatTime } from "@/lib/utils";
 
 export const dynamic = "force-dynamic";
@@ -36,35 +36,58 @@ export default async function DoctorProfilePage({
 
   const days = upcomingDays(7);
   const workingDays = days.filter((d) => windows.some((w) => w.dayOfWeek === d.dayOfWeek));
-  const activeDate = dateParam && days.some((d) => d.date === dateParam) ? dateParam : workingDays[0]?.date;
 
   const session = await getSession();
 
-  let slots: { time: string; availabilityId: number }[] = [];
-  if (activeDate) {
-    const booked = await db
-      .select({ time: appointments.appointmentTime })
-      .from(appointments)
-      .where(
-        and(
-          eq(appointments.doctorId, doctorId),
-          eq(appointments.appointmentDate, activeDate),
-          eq(appointments.status, "booked"),
-        ),
-      );
+  const bookedRows = workingDays.length
+    ? await db
+        .select({ date: appointments.appointmentDate, time: appointments.appointmentTime })
+        .from(appointments)
+        .where(
+          and(
+            eq(appointments.doctorId, doctorId),
+            eq(appointments.status, "booked"),
+            gte(appointments.appointmentDate, days[0]!.date),
+            lte(appointments.appointmentDate, days[days.length - 1]!.date),
+          ),
+        )
+    : [];
 
-    const dayWindows = windows.filter((w) => w.dayOfWeek === dayOfWeekFor(activeDate));
-    const open = availableSlots({
-      windows: dayWindows,
-      date: activeDate,
-      bookedTimes: booked.map((b) => b.time),
-    });
-    slots = open.map((time) => ({
-      time,
-      availabilityId:
-        dayWindows.find((w) => buildSlots(w).includes(time))?.id ?? dayWindows[0]!.id,
-    }));
+  const bookedByDate = new Map<string, string[]>();
+  for (const row of bookedRows) {
+    bookedByDate.set(row.date, [...(bookedByDate.get(row.date) ?? []), row.time]);
   }
+
+  /** Working days with the slots a patient can actually pick right now. */
+  const dayOptions = workingDays.map((day) => {
+    const dayWindows = windows.filter((w) => w.dayOfWeek === day.dayOfWeek);
+    const times = availableSlots({
+      windows: dayWindows,
+      date: day.date,
+      bookedTimes: bookedByDate.get(day.date) ?? [],
+    });
+    return {
+      ...day,
+      times,
+      windows: dayWindows,
+    };
+  });
+
+  // Prefer the requested day, then the first day that still has a free slot, so
+  // the picker never opens on an empty "no slots left" state.
+  const activeDay =
+    dayOptions.find((day) => day.date === dateParam) ??
+    dayOptions.find((day) => day.times.length > 0) ??
+    dayOptions[0];
+
+  const slots: { time: string; availabilityId: number }[] = activeDay
+    ? activeDay.times.map((time) => ({
+        time,
+        availabilityId:
+          activeDay.windows.find((w) => buildSlots(w).includes(time))?.id ??
+          activeDay.windows[0]!.id,
+      }))
+    : [];
 
   return (
     <div className="space-y-6">
@@ -134,25 +157,28 @@ export default async function DoctorProfilePage({
             <p className="text-sm text-slate-500">Choose a day, then pick a free slot.</p>
           </CardHeader>
           <CardContent className="space-y-4">
-            {workingDays.length === 0 ? (
+            {dayOptions.length === 0 ? (
               <p className="text-sm text-slate-600">
                 This doctor has not published availability yet. Please check back later.
               </p>
             ) : (
               <>
                 <div className="flex flex-wrap gap-2">
-                  {workingDays.map((day) => (
+                  {dayOptions.map((day) => (
                     <Link
                       key={day.date}
                       href={`/doctors/${doctor.id}?date=${day.date}`}
                       className={cn(
                         "rounded-lg border px-3 py-1.5 text-xs font-medium",
-                        day.date === activeDate
+                        day.date === activeDay?.date
                           ? "border-teal-600 bg-teal-600 text-white"
                           : "border-slate-300 bg-white text-slate-700 hover:bg-slate-50",
                       )}
                     >
                       {day.isToday ? "Today" : formatDate(day.date)}
+                      {day.times.length === 0 && (
+                        <span className="ml-1 text-[10px] opacity-70">(full)</span>
+                      )}
                     </Link>
                   ))}
                 </div>
@@ -161,14 +187,14 @@ export default async function DoctorProfilePage({
                   <p className="rounded-lg bg-amber-50 p-3 text-sm text-amber-800">
                     You are signed in as a doctor. Sign in with a patient account to book.
                   </p>
-                ) : (
+                ) : activeDay ? (
                   <SlotPicker
                     doctorId={doctor.id}
-                    date={activeDate!}
+                    date={activeDay.date}
                     slots={slots}
                     isSignedIn={Boolean(session)}
                   />
-                )}
+                ) : null}
               </>
             )}
           </CardContent>
