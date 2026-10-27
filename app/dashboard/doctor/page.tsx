@@ -1,11 +1,13 @@
-import { asc, eq } from "drizzle-orm";
+import { and, asc, eq, gte, sql } from "drizzle-orm";
 import { cancelAppointment } from "@/actions/booking";
 import { getDb } from "@/db";
-import { appointments, patients } from "@/db/schema";
+import { appointments, availability, patients } from "@/db/schema";
+import { AvailabilityManager } from "@/components/availability-manager";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { requireRole } from "@/lib/session";
+import { clinicNow } from "@/lib/slots";
 import { formatDate, formatTime } from "@/lib/utils";
 
 export const dynamic = "force-dynamic";
@@ -36,7 +38,35 @@ export default async function DoctorDashboard() {
     .where(eq(appointments.doctorId, session.profileId))
     .orderBy(asc(appointments.appointmentDate), asc(appointments.appointmentTime));
 
-  const today = new Date().toISOString().slice(0, 10);
+  const windows = await db
+    .select({
+      id: availability.id,
+      dayOfWeek: availability.dayOfWeek,
+      startTime: availability.startTime,
+      endTime: availability.endTime,
+      slotMinutes: availability.slotMinutes,
+    })
+    .from(availability)
+    .where(and(eq(availability.doctorId, session.profileId), eq(availability.isActive, true)))
+    .orderBy(asc(availability.dayOfWeek), asc(availability.startTime));
+
+  const bookedPerWindow = await db
+    .select({ availabilityId: appointments.availabilityId, total: sql<number>`count(*)::int` })
+    .from(appointments)
+    .where(
+      and(
+        eq(appointments.doctorId, session.profileId),
+        eq(appointments.status, "booked"),
+        gte(appointments.appointmentDate, clinicNow().date),
+      ),
+    )
+    .groupBy(appointments.availabilityId);
+
+  const lockedIds = bookedPerWindow
+    .filter((row) => row.availabilityId !== null && row.total > 0)
+    .map((row) => row.availabilityId as number);
+
+  const today = clinicNow().date;
   const todays = rows.filter((r) => r.date === today && r.status === "booked");
   const upcoming = rows.filter((r) => r.status === "booked" && r.date >= today);
   const uniquePatients = new Set(rows.map((r) => r.patientName)).size;
@@ -64,6 +94,18 @@ export default async function DoctorDashboard() {
           </Card>
         ))}
       </div>
+
+      <Card>
+        <CardHeader>
+          <CardTitle>Weekly availability</CardTitle>
+          <p className="text-sm text-slate-500">
+            Patients can only book inside these windows. Times are clinic time (IST).
+          </p>
+        </CardHeader>
+        <CardContent>
+          <AvailabilityManager windows={windows} lockedIds={lockedIds} />
+        </CardContent>
+      </Card>
 
       <Card>
         <CardHeader>

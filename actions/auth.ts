@@ -3,7 +3,7 @@
 import { eq } from "drizzle-orm";
 import { redirect } from "next/navigation";
 import { getDb } from "@/db";
-import { doctors, patients, users } from "@/db/schema";
+import { doctors, patients, users, availability } from "@/db/schema";
 import {
   fieldErrors,
   hashPassword,
@@ -60,6 +60,19 @@ export async function signUpAction(_prev: AuthState, formData: FormData): Promis
       })
       .returning({ id: doctors.id });
     if (!doctor) return { error: "Could not create the doctor profile." };
+
+    // A new doctor starts with a Mon–Fri morning schedule so their profile is
+    // bookable straight away; they can edit it from the dashboard.
+    await db.insert(availability).values(
+      [1, 2, 3, 4, 5].map((day) => ({
+        doctorId: doctor.id,
+        dayOfWeek: day,
+        startTime: "09:00",
+        endTime: "13:00",
+        slotMinutes: 30,
+      })),
+    );
+
     profileId = doctor.id;
   } else {
     const [patient] = await db
