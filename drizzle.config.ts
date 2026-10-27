@@ -1,5 +1,9 @@
+import { config } from "dotenv";
 import { defineConfig } from "drizzle-kit";
-import "dotenv/config";
+
+// Local development uses .env.local; CI/Vercel inject real env vars.
+config({ path: ".env.local" });
+config({ path: ".env" });
 
 export default defineConfig({
   schema: "./db/schema.ts",
