@@ -1,6 +1,7 @@
 import { sql } from "drizzle-orm";
 import {
   boolean,
+  index,
   integer,
   numeric,
   pgEnum,
@@ -16,6 +17,7 @@ export const appointmentStatusEnum = pgEnum("appointment_status", [
   "booked",
   "completed",
   "cancelled",
+  "no_show",
 ]);
 
 export const users = pgTable("users", {
@@ -98,6 +100,9 @@ export const appointments = pgTable(
     uniqueIndex("appointments_booked_slot_unique")
       .on(table.doctorId, table.appointmentDate, table.appointmentTime)
       .where(sql`${table.status} = 'booked'`),
+    /** Dashboards filter a doctor's or patient's appointments by date range. */
+    index("appointments_doctor_date_idx").on(table.doctorId, table.appointmentDate),
+    index("appointments_patient_date_idx").on(table.patientId, table.appointmentDate),
   ],
 );
 

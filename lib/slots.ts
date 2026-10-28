@@ -46,6 +46,17 @@ export function clinicNow(instant: Date = new Date()) {
   };
 }
 
+/** Clinic clock right now as "HH:MM" — directly comparable with stored times. */
+export function clinicClock(instant: Date = new Date()) {
+  return toTime(clinicNow(instant).minutes);
+}
+
+/** True once the slot has arrived in clinic time, so the visit can be resolved. */
+export function slotArrived(date: string, time: string, instant: Date = new Date()) {
+  const now = clinicNow(instant);
+  return date < now.date || (date === now.date && toMinutes(time) <= now.minutes);
+}
+
 export function buildSlots(window: Pick<Availability, "startTime" | "endTime" | "slotMinutes">) {
   const slots: string[] = [];
   const start = toMinutes(window.startTime);

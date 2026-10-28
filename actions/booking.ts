@@ -1,13 +1,14 @@
 "use server";
 
-import { and, eq } from "drizzle-orm";
+import { and, eq, lt, lte, or } from "drizzle-orm";
 import { revalidatePath } from "next/cache";
+import { z } from "zod";
 import { getDb } from "@/db";
 import { appointments, availability } from "@/db/schema";
 import { bookingSchema } from "@/lib/auth";
 import { isUniqueViolation } from "@/lib/db-errors";
 import { requireSession } from "@/lib/session";
-import { availableSlots, dayOfWeekFor } from "@/lib/slots";
+import { availableSlots, clinicClock, clinicNow, dayOfWeekFor } from "@/lib/slots";
 
 export type BookingState = { error?: string; message?: string } | null;
 
@@ -109,9 +110,90 @@ export async function cancelAppointment(formData: FormData) {
 
   if (!ownsIt || appointment.status !== "booked") return;
 
-  await db.update(appointments).set({ status: "cancelled" }).where(eq(appointments.id, id));
+  // The status guard makes the transition atomic: a visit that was completed
+  // or already cancelled a moment ago can never be overwritten by this update.
+  await db
+    .update(appointments)
+    .set({ status: "cancelled" })
+    .where(and(eq(appointments.id, id), eq(appointments.status, "booked")));
 
   revalidatePath("/dashboard/patient");
   revalidatePath("/dashboard/doctor");
   revalidatePath(`/doctors/${appointment.doctorId}`);
+}
+
+const resolveIntentSchema = z.enum(["complete", "no_show"]);
+const resolveStatus = { complete: "completed", no_show: "no_show" } as const;
+
+export type ResolveState = { error?: string } | null;
+
+/**
+ * Records the outcome of a visit that has taken place: completed or a no-show.
+ * Only the slot's doctor can resolve it, and the WHERE clause refuses to touch
+ * appointments whose slot has not arrived yet (clinic time), so a future
+ * booking can never be resolved early. Doctor-owned and status conditions live
+ * in the same UPDATE, making the transition atomic against concurrent cancels.
+ */
+export async function resolveAppointment(
+  _prev: ResolveState,
+  formData: FormData,
+): Promise<ResolveState> {
+  const session = await requireSession();
+  if (session.role !== "doctor") {
+    return { error: "Only doctors can record visit outcomes." };
+  }
+
+  const intent = resolveIntentSchema.safeParse(formData.get("intent"));
+  const id = Number(formData.get("appointmentId"));
+  if (!intent.success || !Number.isInteger(id) || id <= 0) {
+    return { error: "That request could not be understood." };
+  }
+
+  const db = getDb();
+  // One instant for both the date and the clock, so they can never disagree
+  // if the clinic day flips between the two reads.
+  const instant = new Date();
+  const now = clinicNow(instant);
+
+  const updated = await db
+    .update(appointments)
+    .set({ status: resolveStatus[intent.data] })
+    .where(
+      and(
+        eq(appointments.id, id),
+        eq(appointments.doctorId, session.profileId),
+        eq(appointments.status, "booked"),
+        or(
+          lt(appointments.appointmentDate, now.date),
+          and(
+            eq(appointments.appointmentDate, now.date),
+            lte(appointments.appointmentTime, clinicClock(instant)),
+          ),
+        ),
+      ),
+    )
+    .returning({ id: appointments.id });
+
+  if (updated.length === 0) {
+    // Diagnose the miss so the doctor sees why, instead of a silent no-op.
+    const [appointment] = await db
+      .select({ status: appointments.status })
+      .from(appointments)
+      .where(
+        and(eq(appointments.id, id), eq(appointments.doctorId, session.profileId)),
+      )
+      .limit(1);
+
+    if (!appointment) return { error: "That appointment was not found." };
+    if (appointment.status !== "booked") {
+      return { error: "That appointment has already been resolved." };
+    }
+    return { error: "That visit has not taken place yet." };
+  }
+
+  revalidatePath("/dashboard/doctor");
+  revalidatePath("/dashboard/patient");
+  revalidatePath(`/doctors/${session.profileId}`);
+
+  return null;
 }
