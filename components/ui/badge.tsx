@@ -11,6 +11,7 @@ const badgeVariants = cva(
         booked: "bg-teal-50 text-teal-700 ring-teal-200",
         cancelled: "bg-rose-50 text-rose-700 ring-rose-200",
         completed: "bg-blue-50 text-blue-700 ring-blue-200",
+        no_show: "bg-amber-50 text-amber-700 ring-amber-200",
         outline: "bg-transparent text-slate-600 ring-slate-300",
       },
     },

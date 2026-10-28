@@ -174,18 +174,31 @@ async function main() {
     }
   }
 
-  console.log("Adding one past appointment for history…");
-  const yesterday = new Date();
-  yesterday.setDate(yesterday.getDate() - 3);
+  console.log("Adding past appointments for history…");
+  const daysAgo = (count: number) => {
+    const date = new Date();
+    date.setDate(date.getDate() - count);
+    return date.toISOString().slice(0, 10);
+  };
 
-  await db.insert(appointments).values({
-    patientId: patient!.id,
-    doctorId: doctorIds[0]!,
-    appointmentDate: yesterday.toISOString().slice(0, 10),
-    appointmentTime: "10:00",
-    status: "completed",
-    reason: "Routine cardiac check-up",
-  });
+  await db.insert(appointments).values([
+    {
+      patientId: patient!.id,
+      doctorId: doctorIds[0]!,
+      appointmentDate: daysAgo(3),
+      appointmentTime: "10:00",
+      status: "completed",
+      reason: "Routine cardiac check-up",
+    },
+    {
+      patientId: patient!.id,
+      doctorId: doctorIds[0]!,
+      appointmentDate: daysAgo(5),
+      appointmentTime: "16:30",
+      status: "no_show",
+      reason: "Follow-up for palpitations",
+    },
+  ]);
 
   console.log("Seed complete.");
   console.log("  Patient  → patient@demo.com / password123");

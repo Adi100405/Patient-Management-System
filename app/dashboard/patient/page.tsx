@@ -3,6 +3,7 @@ import { asc, eq } from "drizzle-orm";
 import { cancelAppointment } from "@/actions/booking";
 import { getDb } from "@/db";
 import { appointments, doctors } from "@/db/schema";
+import type { AppointmentStatus } from "@/db/schema";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -17,7 +18,15 @@ const statusVariant = {
   booked: "booked",
   cancelled: "cancelled",
   completed: "completed",
+  no_show: "no_show",
 } as const;
+
+const statusLabel: Record<AppointmentStatus, string> = {
+  booked: "booked",
+  cancelled: "cancelled",
+  completed: "completed",
+  no_show: "no-show",
+};
 
 export default async function PatientDashboard() {
   const session = await requireRole("patient");
@@ -100,7 +109,7 @@ export default async function PatientDashboard() {
                   {row.reason && <p className="text-xs text-slate-500">Reason: {row.reason}</p>}
                 </div>
                 <div className="flex items-center gap-3">
-                  <Badge variant={statusVariant[row.status]}>{row.status}</Badge>
+                  <Badge variant={statusVariant[row.status]}>{statusLabel[row.status]}</Badge>
                   <form action={cancelAppointment}>
                     <input type="hidden" name="appointmentId" value={row.id} />
                     <Button variant="outline" size="sm" type="submit">
@@ -138,7 +147,7 @@ export default async function PatientDashboard() {
                     {formatDate(row.date)} at {formatTime(row.time)}
                   </p>
                 </div>
-                <Badge variant={statusVariant[row.status]}>{row.status}</Badge>
+                <Badge variant={statusVariant[row.status]}>{statusLabel[row.status]}</Badge>
               </div>
             ))
           )}
