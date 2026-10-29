@@ -6,6 +6,7 @@ import { appointments, availability, doctors } from "@/db/schema";
 import { Badge } from "@/components/ui/badge";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { SlotPicker } from "@/components/slot-picker";
+import { releaseExpiredPayments } from "@/lib/payments/expire";
 import { getSession } from "@/lib/session";
 import { availableSlots, buildSlots, upcomingDays } from "@/lib/slots";
 import { cn, formatCurrency, formatDate, formatTime } from "@/lib/utils";
@@ -25,6 +26,11 @@ export default async function DoctorProfilePage({
   if (!Number.isInteger(doctorId)) notFound();
 
   const db = getDb();
+
+  // Free any slot whose unpaid checkout has expired before we compute what is
+  // bookable. Best-effort: a sweep failure must not take the page down.
+  await releaseExpiredPayments().catch(() => 0);
+
   const [doctor] = await db.select().from(doctors).where(eq(doctors.id, doctorId)).limit(1);
   if (!doctor) notFound();
 

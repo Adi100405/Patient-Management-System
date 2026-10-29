@@ -57,6 +57,25 @@ export function slotArrived(date: string, time: string, instant: Date = new Date
   return date < now.date || (date === now.date && toMinutes(time) <= now.minutes);
 }
 
+/**
+ * IST is a fixed UTC+05:30 with no daylight saving, so a clinic wall-clock slot
+ * maps to exactly one instant. Used for refund cut-offs, which are measured in
+ * real elapsed time rather than calendar days.
+ */
+const CLINIC_UTC_OFFSET_MINUTES = 330;
+
+/** The instant a clinic wall-clock slot starts. */
+export function slotStartsAt(date: string, time: string) {
+  const [y, m, d] = date.split("-").map(Number);
+  const slot = utcDate(`${y}-${String(m).padStart(2, "0")}-${String(d).padStart(2, "0")}`);
+  return new Date(slot.getTime() + (toMinutes(time) - CLINIC_UTC_OFFSET_MINUTES) * 60_000);
+}
+
+/** Hours from `instant` until the slot starts. Negative once the slot has passed. */
+export function hoursUntilSlot(date: string, time: string, instant: Date = new Date()) {
+  return (slotStartsAt(date, time).getTime() - instant.getTime()) / 3_600_000;
+}
+
 export function buildSlots(window: Pick<Availability, "startTime" | "endTime" | "slotMinutes">) {
   const slots: string[] = [];
   const start = toMinutes(window.startTime);

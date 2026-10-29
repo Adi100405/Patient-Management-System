@@ -1,16 +1,24 @@
 "use server";
 
-import { and, eq, lt, lte, or } from "drizzle-orm";
+import { and, eq, gt, isNotNull, lt, lte, or } from "drizzle-orm";
 import { revalidatePath } from "next/cache";
 import { z } from "zod";
 import { getDb } from "@/db";
-import { appointments, availability } from "@/db/schema";
+import { appointments, availability, doctors, payments } from "@/db/schema";
 import { bookingSchema } from "@/lib/auth";
 import { isUniqueViolation } from "@/lib/db-errors";
+import { refundLineFor, sendBookingConfirmation, sendCancellationNotice } from "@/lib/notifications/events";
+import { getPaymentProvider, PAYMENT_HOLD_MINUTES } from "@/lib/payments";
+import { refundForCancellation, type RefundOutcome } from "@/lib/refunds/service";
 import { requireSession } from "@/lib/session";
 import { availableSlots, clinicClock, clinicNow, dayOfWeekFor } from "@/lib/slots";
 
-export type BookingState = { error?: string; message?: string } | null;
+export type BookingState = {
+  error?: string;
+  message?: string;
+  appointmentId?: number;
+  payment?: { amount: string; currency: string; online: boolean };
+} | null;
 
 export async function bookAppointment(
   _prev: BookingState,
@@ -28,6 +36,9 @@ export async function bookAppointment(
 
   const data = parsed.data;
   const db = getDb();
+  // Assigned once the appointment insert succeeds, so the caller can open a
+  // checkout for it and the response can report the fee that is now due.
+  let appointmentId: number | undefined;
 
   const [slotWindow] = await db
     .select()
@@ -41,6 +52,43 @@ export async function bookAppointment(
 
   if (slotWindow.dayOfWeek !== dayOfWeekFor(data.date)) {
     return { error: "The doctor does not consult on that day." };
+  }
+
+  const [doctor] = await db
+    .select({ fee: doctors.consultationFee })
+    .from(doctors)
+    .where(eq(doctors.id, data.doctorId))
+    .limit(1);
+
+  if (!doctor) {
+    return { error: "That doctor is no longer available." };
+  }
+
+  const provider = getPaymentProvider();
+  const online = provider.publicKeyId() !== null;
+
+  // One unpaid checkout at a time. Without this a single patient could hold
+  // several doctors' slots in parallel simply by never finishing payment.
+  if (online) {
+    const [unpaid] = await db
+      .select({ id: payments.id })
+      .from(payments)
+      .where(
+        and(
+          eq(payments.patientId, session.profileId),
+          eq(payments.status, "pending"),
+          isNotNull(payments.expiresAt),
+          gt(payments.expiresAt, new Date()),
+        ),
+      )
+      .limit(1);
+
+    if (unpaid) {
+      return {
+        error:
+          "You already have a booking awaiting payment. Complete it, or wait for the hold to expire.",
+      };
+    }
   }
 
   const booked = await db
@@ -65,19 +113,42 @@ export async function bookAppointment(
   }
 
   try {
-    await db.insert(appointments).values({
+    const [appointment] = await db
+      .insert(appointments)
+      .values({
+        patientId: session.profileId,
+        doctorId: data.doctorId,
+        availabilityId: slotWindow.id,
+        appointmentDate: data.date,
+        appointmentTime: data.time,
+        reason: data.reason,
+      })
+      .returning({ id: appointments.id });
+    appointmentId = appointment.id;
+
+    // Every booking owns exactly one payment row from the moment it exists, so
+    // refunds, receipts and history never have to guess what was owed.
+    // Online: the slot is held until the webhook settles it. Manual: the fee is
+    // collected at the clinic and the appointment stands on its own.
+    await db.insert(payments).values({
+      appointmentId: appointment.id,
       patientId: session.profileId,
       doctorId: data.doctorId,
-      availabilityId: slotWindow.id,
-      appointmentDate: data.date,
-      appointmentTime: data.time,
-      reason: data.reason,
+      amount: doctor.fee,
+      currency: "INR",
+      status: "pending",
+      provider: provider.name,
+      expiresAt: online ? new Date(Date.now() + PAYMENT_HOLD_MINUTES * 60_000) : null,
     });
   } catch (error) {
     // The partial unique index is the authoritative guard against two patients
     // racing for the same slot between the read above and this insert.
     if (isUniqueViolation(error, "appointments_booked_slot_unique")) {
       return { error: "That slot was just taken. Please choose another time." };
+    }
+    // Compensate: a booking must never survive without its payment row.
+    if (appointmentId !== undefined) {
+      await db.delete(appointments).where(eq(appointments.id, appointmentId));
     }
     throw error;
   }
@@ -86,7 +157,17 @@ export async function bookAppointment(
   revalidatePath("/dashboard/patient");
   revalidatePath("/dashboard/doctor");
 
-  return { message: `Booked for ${data.date} at ${data.time}` };
+  // Notification after the fact, never inside the transactional path: a booking
+  // this successful must not fail because an email could not be sent.
+  if (appointmentId !== undefined) {
+    await sendBookingConfirmation(appointmentId, { online });
+  }
+
+  return {
+    message: `Booked for ${data.date} at ${data.time}`,
+    appointmentId,
+    payment: { amount: doctor.fee, currency: "INR", online },
+  };
 }
 
 export async function cancelAppointment(formData: FormData) {
@@ -112,10 +193,41 @@ export async function cancelAppointment(formData: FormData) {
 
   // The status guard makes the transition atomic: a visit that was completed
   // or already cancelled a moment ago can never be overwritten by this update.
-  await db
+  const cancelled = await db
     .update(appointments)
     .set({ status: "cancelled" })
-    .where(and(eq(appointments.id, id), eq(appointments.status, "booked")));
+    .where(and(eq(appointments.id, id), eq(appointments.status, "booked")))
+    .returning({ id: appointments.id });
+
+  // Cancelling also ends any checkout still in flight, so an abandoned Razorpay
+  // window cannot later "confirm" a visit the patient already cancelled.
+  if (cancelled.length > 0) {
+    await db
+      .update(payments)
+      .set({ status: "failed", failureReason: "cancelled_by_patient", expiresAt: null, updatedAt: new Date() })
+      .where(and(eq(payments.appointmentId, id), eq(payments.status, "pending")));
+
+    // Money that was already captured is returned per policy. This is
+    // deliberately separate from the cancellation: the visit is cancelled even
+    // if the refund cannot be started, and the refund's own status says whether
+    // the money has actually moved.
+    let refundOutcome: RefundOutcome = { status: "none", reason: "no_refund_due" };
+    try {
+      refundOutcome = await refundForCancellation({
+        appointmentId: id,
+        cancelledBy: session.role === "doctor" ? "clinic" : "patient",
+      });
+    } catch {
+      // The refund row records its own failure; nothing to surface here.
+    }
+
+    // Told only what is actually true: the policy outcome, never a promise that
+    // money is on its way before the gateway has accepted the refund.
+    await sendCancellationNotice(id, {
+      cancelledBy: session.role === "doctor" ? "clinic" : "patient",
+      refundLine: refundLineFor(refundOutcome),
+    });
+  }
 
   revalidatePath("/dashboard/patient");
   revalidatePath("/dashboard/doctor");

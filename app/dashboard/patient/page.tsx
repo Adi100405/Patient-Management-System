@@ -2,11 +2,15 @@ import Link from "next/link";
 import { asc, eq } from "drizzle-orm";
 import { cancelAppointment } from "@/actions/booking";
 import { getDb } from "@/db";
-import { appointments, doctors } from "@/db/schema";
+import { appointments, doctors, payments } from "@/db/schema";
 import type { AppointmentStatus } from "@/db/schema";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { PaymentCheckout } from "@/components/payment-checkout";
+import { RefundStatusLine } from "@/components/refund-status";
+import { refundsForPatient } from "@/lib/refunds/queries";
+import { sweepReminders } from "@/lib/notifications/reminders";
 import { requireRole } from "@/lib/session";
 import { clinicNow } from "@/lib/slots";
 import { formatDate, formatTime } from "@/lib/utils";
@@ -30,6 +34,11 @@ const statusLabel: Record<AppointmentStatus, string> = {
 
 export default async function PatientDashboard() {
   const session = await requireRole("patient");
+
+  // Reminders are derived from live state, so this sweep is both the scheduled
+  // behaviour and its own safety net: opening the dashboard sends whatever has
+  // come due. Best-effort — a sweep failure must not take the page down.
+  await sweepReminders().catch(() => null);
   const db = getDb();
 
   const rows = await db
@@ -42,15 +51,34 @@ export default async function PatientDashboard() {
       doctorName: doctors.fullName,
       specialization: doctors.specialization,
       fee: doctors.consultationFee,
+      paymentStatus: payments.status,
+      paymentId: payments.id,
+      paymentAmount: payments.amount,
+      paymentCurrency: payments.currency,
+      paymentProvider: payments.provider,
+      paymentFailure: payments.failureReason,
     })
     .from(appointments)
     .innerJoin(doctors, eq(appointments.doctorId, doctors.id))
+    .leftJoin(payments, eq(payments.appointmentId, appointments.id))
     .where(eq(appointments.patientId, session.profileId))
     .orderBy(asc(appointments.appointmentDate), asc(appointments.appointmentTime));
+
+  const refundsByPayment = await refundsForPatient(session.profileId);
 
   const today = clinicNow().date;
   const upcoming = rows.filter((r) => r.status === "booked" && r.date >= today);
   const history = rows.filter((r) => !upcoming.includes(r)).reverse();
+
+  const awaitingPayment = upcoming.filter(
+    (r) => r.paymentStatus === "pending" && r.paymentProvider !== "manual",
+  ).length;
+  const paidTotal = rows
+    .filter((r) => r.paymentStatus === "succeeded" || r.paymentStatus === "partially_refunded")
+    .reduce((sum, r) => sum + Number(r.paymentAmount ?? 0), 0);
+  const refundsInProgress = [...refundsByPayment.values()]
+    .flat()
+    .filter((refund) => refund.status === "pending" || refund.status === "processing").length;
 
   return (
     <div className="space-y-6">
@@ -61,14 +89,13 @@ export default async function PatientDashboard() {
         </p>
       </div>
 
-      <div className="grid gap-4 sm:grid-cols-3">
+      <div className="grid gap-4 sm:grid-cols-4">
         {[
           { label: "Upcoming", value: upcoming.length },
+          { label: "Awaiting payment", value: awaitingPayment },
           { label: "Total bookings", value: rows.length },
-          {
-            label: "Cancelled",
-            value: rows.filter((r) => r.status === "cancelled").length,
-          },
+          { label: "Paid to date", value: `₹${paidTotal.toFixed(0)}` },
+          { label: "Refunds in progress", value: refundsInProgress },
         ].map((stat) => (
           <Card key={stat.label}>
             <CardContent className="p-5">
@@ -107,9 +134,29 @@ export default async function PatientDashboard() {
                     {formatDate(row.date)} at {formatTime(row.time)}
                   </p>
                   {row.reason && <p className="text-xs text-slate-500">Reason: {row.reason}</p>}
+                  <p className="text-xs text-slate-500">
+                    {row.paymentStatus === "succeeded" ? (
+                      <span className="text-teal-700">
+                        Paid ₹{Number(row.paymentAmount).toFixed(0)} {row.paymentCurrency}
+                      </span>
+                    ) : row.paymentProvider === "manual" || row.paymentStatus === null ? (
+                      <>Fee ₹{Number(row.paymentAmount ?? row.fee).toFixed(0)} payable at the clinic</>
+                    ) : (
+                      <>
+                        Fee ₹{Number(row.paymentAmount ?? row.fee).toFixed(0)} · payment pending
+                      </>
+                    )}
+                  </p>
                 </div>
-                <div className="flex items-center gap-3">
+                <div className="flex flex-wrap items-center gap-3">
                   <Badge variant={statusVariant[row.status]}>{statusLabel[row.status]}</Badge>
+                  {row.paymentStatus === "pending" && row.paymentProvider !== "manual" && (
+                    <PaymentCheckout
+                      appointmentId={row.id}
+                      amount={String(row.paymentAmount ?? row.fee)}
+                      currency={row.paymentCurrency ?? "INR"}
+                    />
+                  )}
                   <form action={cancelAppointment}>
                     <input type="hidden" name="appointmentId" value={row.id} />
                     <Button variant="outline" size="sm" type="submit">
@@ -147,7 +194,41 @@ export default async function PatientDashboard() {
                     {formatDate(row.date)} at {formatTime(row.time)}
                   </p>
                 </div>
-                <Badge variant={statusVariant[row.status]}>{statusLabel[row.status]}</Badge>
+                <div className="flex flex-wrap items-center justify-end gap-3">
+                  {row.paymentStatus === "succeeded" && (
+                    <span className="text-xs text-teal-700">
+                      Paid ₹{Number(row.paymentAmount).toFixed(0)}
+                    </span>
+                  )}
+                  {row.paymentStatus === "partially_refunded" && (
+                    <span className="text-xs text-slate-600">Partly refunded</span>
+                  )}
+                  {row.paymentStatus === "refunded" && (
+                    <span className="text-xs text-slate-600">Refund issued</span>
+                  )}
+                  {row.paymentStatus === "failed" && row.paymentFailure && (
+                    <span className="text-xs text-rose-600">
+                      {row.paymentFailure === "checkout_expired"
+                        ? "Payment expired"
+                        : row.paymentFailure === "cancelled_by_patient"
+                          ? "Cancelled before payment"
+                          : "Payment failed"}
+                    </span>
+                  )}
+                  <RefundStatusLine refunds={refundsByPayment.get(row.paymentId ?? -1) ?? []} />
+                  {(row.paymentStatus === "succeeded" ||
+                    row.paymentStatus === "partially_refunded" ||
+                    row.paymentStatus === "refunded") &&
+                    row.paymentId !== null && (
+                      <Link
+                        href={`/dashboard/patient/receipts/${row.paymentId}`}
+                        className="text-xs font-medium text-teal-700 hover:underline"
+                      >
+                        Receipt
+                      </Link>
+                    )}
+                  <Badge variant={statusVariant[row.status]}>{statusLabel[row.status]}</Badge>
+                </div>
               </div>
             ))
           )}
