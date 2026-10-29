@@ -25,7 +25,7 @@ declare global {
   }
 }
 
-const CHECKOUT_SCRIPT = "https://checkouts.razorpay.com/v1/checkout.js";
+const CHECKOUT_SCRIPT = "https://checkout.razorpay.com/v1/checkout.js";
 
 /**
  * Loads the gateway script once and reports when the global constructor is
