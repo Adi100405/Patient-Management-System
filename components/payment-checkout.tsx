@@ -27,45 +27,69 @@ declare global {
 
 const CHECKOUT_SCRIPT = "https://checkouts.razorpay.com/v1/checkout.js";
 
-/** Loads the gateway script once and reports when the global constructor is usable. */
-function useCheckoutScript(): { ready: boolean; failed: boolean } {
+/**
+ * Loads the gateway script once and reports when the global constructor is
+ * usable. Polling survives the give-up timeout, so a script that took an
+ * unusually long time is still adopted when it finally lands; `retry()` lets a
+ * patient re-arm everything after a blocked load without a full page refresh.
+ */
+function useCheckoutScript(): { ready: boolean; failed: boolean; retry: () => void } {
   const [ready, setReady] = useState(false);
   const [failed, setFailed] = useState(false);
+  const [attempt, setAttempt] = useState(0);
 
   useEffect(() => {
     let cancelled = false;
 
-    const existing = document.querySelector(`script[src="${CHECKOUT_SCRIPT}"]`);
-    if (!existing) {
-      const script = document.createElement("script");
-      script.src = CHECKOUT_SCRIPT;
-      script.async = true;
-      script.addEventListener("error", () => {
-        if (!cancelled) setFailed(true);
-      });
-      document.head.appendChild(script);
-    }
+    const handleError = () => {
+      if (!cancelled) setFailed(true);
+    };
+
+    const script =
+      document.querySelector<HTMLScriptElement>(`script[src="${CHECKOUT_SCRIPT}"]`) ??
+      (() => {
+        const created = document.createElement("script");
+        created.src = CHECKOUT_SCRIPT;
+        created.async = true;
+        document.head.appendChild(created);
+        return created;
+      })();
+    // An existing tag may have errored before this mount — cover it too.
+    script.addEventListener("error", handleError);
 
     const poll = setInterval(() => {
       if (typeof window.Razorpay === "function") {
-        if (!cancelled) setReady(true);
-        clearInterval(poll);
+        if (!cancelled) {
+          setReady(true);
+          setFailed(false);
+          clearInterval(poll);
+          clearTimeout(giveUp);
+        }
       }
     }, 200);
 
-    const timeout = setTimeout(() => {
+    // Generous ceiling so a slow connection still gets through; the poll is
+    // NOT cleared here, so a late load recovers instead of dead-ending.
+    const giveUp = setTimeout(() => {
       if (!cancelled) setFailed(true);
-      clearInterval(poll);
-    }, 15_000);
+    }, 30_000);
 
     return () => {
       cancelled = true;
       clearInterval(poll);
-      clearTimeout(timeout);
+      clearTimeout(giveUp);
     };
-  }, []);
+  }, [attempt]);
 
-  return { ready, failed };
+  return {
+    ready,
+    failed,
+    retry: () => {
+      setFailed(false);
+      setReady(false);
+      setAttempt((value) => value + 1);
+    },
+  };
 }
 
 type Phase = "idle" | "confirming" | "dismissed";
@@ -84,7 +108,7 @@ export function PaymentCheckout({
     createPaymentOrder,
     null,
   );
-  const { ready, failed } = useCheckoutScript();
+  const { ready, failed, retry } = useCheckoutScript();
   const [phase, setPhase] = useState<Phase>("idle");
   const [attempt, setAttempt] = useState(0);
   const openedForOrder = useRef<string | null>(null);
@@ -138,9 +162,16 @@ export function PaymentCheckout({
 
   if (order && failed) {
     return (
-      <p className="text-sm text-rose-600">
-        The payment window could not load. Please refresh and try again.
-      </p>
+      <div className="space-y-1">
+        <p className="text-sm text-rose-600">The payment window could not load.</p>
+        <p className="text-xs text-slate-600">
+          This is usually an ad-blocker or privacy extension blocking the payment provider. Allow
+          this site in your blocker, or try a different browser, then:
+        </p>
+        <Button size="sm" type="button" onClick={retry}>
+          Try again
+        </Button>
+      </div>
     );
   }
 
