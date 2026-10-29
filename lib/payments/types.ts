@@ -51,12 +51,31 @@ export type CreateOrderInput = {
   notes?: Record<string, string>;
 };
 
+/** A payment as the gateway reports it when asked for the authoritative state. */
+export type ProviderPayment = {
+  id: string;
+  /** The order this payment belongs to, as the gateway recorded it. */
+  orderId: string;
+  /** The gateway's lifecycle word for the payment (`captured`, `failed`, ...). */
+  status: string;
+  /** True once the gateway actually holds the money. */
+  captured: boolean;
+  amountMinor: number;
+  currency: string;
+  /** Notes echoed back by the gateway — our appointmentId lives here. */
+  notes?: Record<string, string>;
+  /** The gateway's failure description when the payment did not go through. */
+  errorDescription?: string;
+};
+
 export type PaymentProvider = {
   /** Stored on the payment row so historical records stay attributable. */
   readonly name: string;
   createOrder(input: CreateOrderInput): Promise<ProviderOrder>;
-  /** Sends money back. The provider settles asynchronously and reports by webhook. */
+  /** Sends money back; the returned status says whether it settled at once. */
   createRefund(input: CreateRefundInput): Promise<ProviderRefund>;
+  /** Reads a payment's authoritative state back from the gateway. */
+  fetchPayment(providerPaymentId: string): Promise<ProviderPayment | null>;
   /** Constant-time HMAC check of a webhook body against its signature header. */
   verifyWebhook(rawBody: string, signature: string): boolean;
   /** Normalises a provider payload into the events this app understands. */

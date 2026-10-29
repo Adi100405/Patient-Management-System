@@ -2,7 +2,12 @@
 
 import { useActionState, useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
-import { createPaymentOrder, type CreatePaymentOrderState } from "@/actions/payments";
+import {
+  confirmCheckout,
+  createPaymentOrder,
+  type ConfirmCheckoutResult,
+  type CreatePaymentOrderState,
+} from "@/actions/payments";
 import { Button } from "@/components/ui/button";
 
 type RazorpayOptions = {
@@ -12,7 +17,11 @@ type RazorpayOptions = {
   currency: string;
   name: string;
   description?: string;
-  handler: () => void;
+  handler: (response: {
+    razorpay_order_id: string;
+    razorpay_payment_id: string;
+    razorpay_signature: string;
+  }) => void;
   modal?: { ondismiss?: () => void; escape?: boolean };
   theme?: { color?: string };
 };
@@ -124,6 +133,37 @@ export function PaymentCheckout({
     const Razorpay = window.Razorpay;
     if (typeof Razorpay !== "function") return;
 
+    /** Asks the server to verify the payment with the gateway and settle the
+     * ledger, with one extra pass in case the gateway reports settlement just
+     * after the checkout closes. */
+    const confirmAndSettle = async (
+      paymentReference: string,
+      rechecksLeft: number,
+    ): Promise<void> => {
+      let result: ConfirmCheckoutResult;
+      try {
+        result = await confirmCheckout({ razorpayPaymentId: paymentReference });
+      } catch {
+        result = {
+          ok: false,
+          error: "Could not reach the server to confirm the payment.",
+        };
+      }
+      if (result.ok) {
+        setPhase("idle");
+        router.refresh();
+        return;
+      }
+      if (result.notYet && rechecksLeft > 0) {
+        setTimeout(() => {
+          void confirmAndSettle(paymentReference, rechecksLeft - 1);
+        }, 4_000);
+        return;
+      }
+      setPhase("dismissed");
+      router.refresh();
+    };
+
     openedForOrder.current = key;
     const checkout = new Razorpay({
       key: order.keyId,
@@ -133,11 +173,12 @@ export function PaymentCheckout({
       name: "Medrella",
       description: "Consultation fee",
       theme: { color: "#0f766e" },
-      handler: () => {
-        // The webhook is the source of truth for a successful payment. Give it a
-        // moment to land, then re-read the server-rendered dashboard.
+      handler: (response) => {
+        // The success screen is a hint, never the truth: the server verifies
+        // the payment with the gateway API (real capture, right amount) and
+        // settles the ledger before the dashboard believes anything.
         setPhase("confirming");
-        setTimeout(() => router.refresh(), 2500);
+        void confirmAndSettle(response.razorpay_payment_id, 1);
       },
       modal: {
         ondismiss: () => {

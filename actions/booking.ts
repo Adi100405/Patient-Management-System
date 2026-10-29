@@ -7,11 +7,19 @@ import { getDb } from "@/db";
 import { appointments, availability, doctors, payments } from "@/db/schema";
 import { bookingSchema } from "@/lib/auth";
 import { isUniqueViolation } from "@/lib/db-errors";
-import { refundLineFor, sendBookingConfirmation, sendCancellationNotice } from "@/lib/notifications/events";
+import { refundLineFor, sendBookingConfirmation, sendCancellationNotice, sendRescheduleNotice } from "@/lib/notifications/events";
 import { getPaymentProvider, PAYMENT_HOLD_MINUTES } from "@/lib/payments";
 import { refundForCancellation, type RefundOutcome } from "@/lib/refunds/service";
 import { requireSession } from "@/lib/session";
-import { availableSlots, clinicClock, clinicNow, dayOfWeekFor } from "@/lib/slots";
+import {
+  availableSlots,
+  buildSlots,
+  clinicClock,
+  clinicNow,
+  dayOfWeekFor,
+  slotArrived,
+} from "@/lib/slots";
+import { formatDate, formatTime } from "@/lib/utils";
 
 export type BookingState = {
   error?: string;
@@ -308,4 +316,131 @@ export async function resolveAppointment(
   revalidatePath(`/doctors/${session.profileId}`);
 
   return null;
+}
+
+export type RescheduleState = { error?: string; message?: string } | null;
+
+/**
+ * Moves a booked appointment to a new slot with the same doctor.
+ *
+ * The patient owns the move: same ownership and status rules as cancellation,
+ * and the new slot must be a real, free, future slot of that doctor's published
+ * availability. The database's unique booked-slot index is the final arbiter —
+ * two patients racing for the same free slot cannot both win, and the loser is
+ * told the truth ("that slot was just taken") rather than being silently
+ * ignored.
+ *
+ * Payment and refund handling: the consultation fee does not change with the
+ * slot, so a captured payment simply follows the appointment — nothing to
+ * charge and nothing to refund. A checkout still in flight keeps its hold: the
+ * payment row points at the appointment, not at a slot.
+ */
+export async function rescheduleAppointment(
+  _prev: RescheduleState,
+  formData: FormData,
+): Promise<RescheduleState> {
+  const session = await requireSession();
+  if (session.role !== "patient") {
+    return { error: "Only patients can reschedule appointments." };
+  }
+
+  const id = Number(formData.get("appointmentId"));
+  const rawDate = formData.get("date");
+  const rawTime = formData.get("time");
+  const date = typeof rawDate === "string" ? rawDate : "";
+  const time = typeof rawTime === "string" ? rawTime : "";
+  if (!Number.isInteger(id) || id <= 0 || !/^\d{4}-\d{2}-\d{2}$/.test(date) || !/^\d{2}:\d{2}$/.test(time)) {
+    return { error: "That request could not be understood." };
+  }
+
+  const db = getDb();
+  const [appointment] = await db
+    .select()
+    .from(appointments)
+    .where(eq(appointments.id, id))
+    .limit(1);
+
+  if (!appointment) return { error: "Appointment not found." };
+  if (appointment.patientId !== session.profileId) {
+    return { error: "That appointment does not belong to you." };
+  }
+  if (appointment.status !== "booked") {
+    return { error: "Only booked appointments can be rescheduled." };
+  }
+  if (appointment.appointmentDate === date && appointment.appointmentTime === time) {
+    return { error: "That is already your current slot." };
+  }
+  if (slotArrived(date, time)) {
+    return { error: "Pick a slot in the future." };
+  }
+
+  // The new slot must come from the doctor's published availability, exactly
+  // like a fresh booking — a reschedule cannot invent consulting hours.
+  const windows = await db
+    .select()
+    .from(availability)
+    .where(and(eq(availability.doctorId, appointment.doctorId), eq(availability.isActive, true)));
+
+  const dayOfWeek = dayOfWeekFor(date);
+  const matchingWindow = windows.find(
+    (w) => w.dayOfWeek === dayOfWeek && buildSlots(w).includes(time),
+  );
+  if (!matchingWindow) {
+    return { error: "The doctor does not offer that time. Pick another slot." };
+  }
+
+  const bookedRows = await db
+    .select({ date: appointments.appointmentDate, time: appointments.appointmentTime })
+    .from(appointments)
+    .where(eq(appointments.doctorId, appointment.doctorId));
+  const bookedByDate = new Map<string, string[]>();
+  for (const row of bookedRows) {
+    bookedByDate.set(row.date, [...(bookedByDate.get(row.date) ?? []), row.time]);
+  }
+  // The appointment's own current slot counts as free here — it is the row
+  // being moved, not a competitor.
+  const free = availableSlots({
+    windows: windows.filter((w) => w.dayOfWeek === dayOfWeek),
+    date,
+    bookedTimes: (bookedByDate.get(date) ?? []).filter(
+      (t) => !(date === appointment.appointmentDate && t === appointment.appointmentTime),
+    ),
+  });
+  if (!free.includes(time)) {
+    return { error: "That slot was just taken. Pick another time." };
+  }
+
+  const previousDate = appointment.appointmentDate;
+  const previousTime = appointment.appointmentTime;
+
+  try {
+    const moved = await db
+      .update(appointments)
+      .set({ appointmentDate: date, appointmentTime: time, availabilityId: matchingWindow.id })
+      .where(and(eq(appointments.id, id), eq(appointments.status, "booked")))
+      .returning({ id: appointments.id });
+
+    if (moved.length === 0) {
+      return { error: "That appointment is no longer bookable." };
+    }
+  } catch (error) {
+    // Someone else took the slot between our check and this write. The index
+    // refused the move; the appointment is untouched.
+    if (isUniqueViolation(error, "appointments_booked_slot_unique")) {
+      return { error: "That slot was just taken. Pick another time." };
+    }
+    throw error;
+  }
+
+  revalidatePath("/dashboard/patient");
+  revalidatePath("/dashboard/doctor");
+  revalidatePath(`/doctors/${appointment.doctorId}`);
+
+  // Reminders need no cleanup: the sweep reads live state, so the moved slot's
+  // reminders fire at the new time and the old ones never fire at all.
+  await sendRescheduleNotice(id, { previousDate, previousTime });
+
+  return {
+    message: `Rescheduled to ${formatDate(date)} at ${formatTime(time)}`,
+  };
 }

@@ -1,15 +1,19 @@
 import { NextResponse } from "next/server";
 import { and, eq, ne, sql } from "drizzle-orm";
 import { getDb } from "@/db";
-import { appointments, payments, refunds } from "@/db/schema";
-import { isUniqueViolation } from "@/lib/db-errors";
-import { sendPaymentConfirmation, sendRefundUpdate } from "@/lib/notifications/events";
+import { payments, refunds } from "@/db/schema";
+import { sendRefundUpdate } from "@/lib/notifications/events";
 import { getPaymentProvider } from "@/lib/payments";
-import { refundUnhonouredPayment, syncPaymentRefundState } from "@/lib/refunds/service";
+import { confirmPayment, failPayment } from "@/lib/payments/ledger";
+import { syncPaymentRefundState } from "@/lib/refunds/service";
 
 /**
- * Gateway webhook. The signature is verified over the raw body before anything
- * is parsed, so a forged request cannot move money or change state.
+ * Gateway webhook. This endpoint is optional: the checkout confirmation no
+ * longer waits for it (see actions/payments.ts, which verifies the payment
+ * directly with the gateway). It remains as the backstop for events that can
+ * only arrive out-of-band — an asynchronous refund settlement, say — and its
+ * signature is verified over the raw body before anything is parsed, so a
+ * forged request cannot move money or change state.
  *
  * Every handler is idempotent: providers retry, and events can arrive out of
  * order. A captured payment never downgrades to failed, a repeated capture is a
@@ -59,51 +63,6 @@ export async function POST(request: Request) {
 
   await failPayment(payment.id, payment.appointmentId, event.paymentId, event.reason);
   return NextResponse.json({ received: true });
-}
-
-async function confirmPayment(paymentId: number, appointmentId: number, providerPaymentId: string) {
-  const db = getDb();
-  const now = new Date();
-
-  // Conditional on "not already succeeded": duplicate captures update nothing.
-  const confirmed = await db
-    .update(payments)
-    .set({
-      status: "succeeded",
-      providerPaymentId,
-      paidAt: now,
-      updatedAt: now,
-      expiresAt: null,
-      failureReason: null,
-    })
-    .where(and(eq(payments.id, paymentId), ne(payments.status, "succeeded")))
-    .returning({ id: payments.id });
-
-  if (confirmed.length === 0) return;
-
-  await restoreAppointment(appointmentId, paymentId);
-  // Only a real transition reaches here, so a duplicate capture never emails.
-  await sendPaymentConfirmation(appointmentId);
-}
-
-/**
- * A successful payment must leave the patient with a visit. If the hold was
- * released before the money settled (slow checkout, expired slot), the
- * appointment is reinstated — unless another patient has since taken the slot,
- * in which case the payment is refunded in full rather than double-booking the
- * doctor or keeping money for a visit that will not happen.
- */
-async function restoreAppointment(appointmentId: number, paymentId: number) {
-  const db = getDb();
-  try {
-    await db
-      .update(appointments)
-      .set({ status: "booked" })
-      .where(and(eq(appointments.id, appointmentId), eq(appointments.status, "cancelled")));
-  } catch (error) {
-    if (!isUniqueViolation(error, "appointments_booked_slot_unique")) throw error;
-    await refundUnhonouredPayment(paymentId);
-  }
 }
 
 /**
@@ -205,34 +164,4 @@ async function reconcileRefund(event: {
   }
 
   return { refundId: refund.id, failed: failed.length > 0 };
-}
-
-async function failPayment(
-  paymentId: number,
-  appointmentId: number,
-  providerPaymentId: string,
-  reason: string,
-) {
-  const db = getDb();
-  const now = new Date();
-
-  const failed = await db
-    .update(payments)
-    .set({
-      status: "failed",
-      providerPaymentId,
-      failureReason: reason,
-      updatedAt: now,
-      expiresAt: null,
-    })
-    .where(and(eq(payments.id, paymentId), eq(payments.status, "pending")))
-    .returning({ id: payments.id });
-
-  // A failure for an already-settled payment is stale news, not a state change.
-  if (failed.length === 0) return;
-
-  await db
-    .update(appointments)
-    .set({ status: "cancelled" })
-    .where(and(eq(appointments.id, appointmentId), eq(appointments.status, "booked")));
 }

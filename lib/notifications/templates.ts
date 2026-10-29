@@ -100,6 +100,28 @@ export function appointmentCancelled(
   };
 }
 
+export function appointmentRescheduled(
+  ctx: AppointmentMailContext,
+  options: { previousDate: string; previousTime: string },
+): MailContent {
+  return {
+    subject: `Appointment rescheduled — ${formatDate(ctx.date)} at ${formatTime(ctx.time)}`,
+    text: [
+      greeting(ctx),
+      "Your appointment has been moved to a new time.",
+      "",
+      `New time: ${visitLine(ctx)}`,
+      `Previous time: ${formatDate(options.previousDate)} at ${formatTime(options.previousTime)}`,
+      ctx.reason ? `Reason: ${ctx.reason}` : "",
+      "",
+      "Any payment you have already made carries over — no extra charge.",
+      "You can view or cancel it from your dashboard.",
+    ]
+      .filter(Boolean)
+      .join("\n") + signOff,
+  };
+}
+
 export function reminder(
   ctx: AppointmentMailContext,
   options: { kind: "24h" | "1h" },
