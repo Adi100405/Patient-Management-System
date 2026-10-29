@@ -1,18 +1,19 @@
 import Link from "next/link";
-import { asc, eq } from "drizzle-orm";
+import { and, asc, eq, gte, inArray, lte } from "drizzle-orm";
 import { cancelAppointment } from "@/actions/booking";
 import { getDb } from "@/db";
-import { appointments, doctors, payments } from "@/db/schema";
+import { appointments, availability, doctors, payments } from "@/db/schema";
 import type { AppointmentStatus } from "@/db/schema";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { PaymentCheckout } from "@/components/payment-checkout";
 import { RefundStatusLine } from "@/components/refund-status";
+import { RescheduleAppointment, type RescheduleDayOption } from "@/components/reschedule-appointment";
 import { refundsForPatient } from "@/lib/refunds/queries";
 import { sweepReminders } from "@/lib/notifications/reminders";
 import { requireRole } from "@/lib/session";
-import { clinicNow } from "@/lib/slots";
+import { availableSlots, clinicNow, upcomingDays } from "@/lib/slots";
 import { formatDate, formatTime } from "@/lib/utils";
 
 export const dynamic = "force-dynamic";
@@ -44,6 +45,7 @@ export default async function PatientDashboard() {
   const rows = await db
     .select({
       id: appointments.id,
+      doctorId: appointments.doctorId,
       date: appointments.appointmentDate,
       time: appointments.appointmentTime,
       status: appointments.status,
@@ -69,6 +71,62 @@ export default async function PatientDashboard() {
   const today = clinicNow().date;
   const upcoming = rows.filter((r) => r.status === "booked" && r.date >= today);
   const history = rows.filter((r) => !upcoming.includes(r)).reverse();
+
+  // Free-slot options for rescheduling, computed once per doctor (not per
+  // row) with the same availability logic the booking page uses. The patient's
+  // own current slot is excluded from the booked set, so a day tab can show it
+  // again if it is otherwise free.
+  const rescheduleDays = new Map<number, RescheduleDayOption[]>();
+  const doctorIds = [...new Set(upcoming.map((r) => r.doctorId))];
+  const days7 = upcomingDays(7);
+  if (doctorIds.length > 0) {
+    const windows = await db
+      .select()
+      .from(availability)
+      .where(and(inArray(availability.doctorId, doctorIds), eq(availability.isActive, true)));
+    const horizonStart = days7[0]!.date;
+    const horizonEnd = days7[days7.length - 1]!.date;
+    const allBooked = await db
+      .select({
+        doctorId: appointments.doctorId,
+        date: appointments.appointmentDate,
+        time: appointments.appointmentTime,
+      })
+      .from(appointments)
+      .where(
+        and(
+          inArray(appointments.doctorId, doctorIds),
+          eq(appointments.status, "booked"),
+          gte(appointments.appointmentDate, horizonStart),
+          lte(appointments.appointmentDate, horizonEnd),
+        ),
+      );
+
+    for (const row of upcoming) {
+      const doctorWindows = windows.filter((w) => w.doctorId === row.doctorId);
+      rescheduleDays.set(
+        row.id,
+        days7.map((day) => ({
+          date: day.date,
+          label: day.label,
+          isToday: day.isToday,
+          times: availableSlots({
+            windows: doctorWindows.filter((w) => w.dayOfWeek === day.dayOfWeek),
+            date: day.date,
+            bookedTimes: allBooked
+              .filter(
+                (b) =>
+                  b.doctorId === row.doctorId &&
+                  b.date === day.date &&
+                  // The appointment being rescheduled is not its own competitor.
+                  !(b.date === row.date && b.time === row.time),
+              )
+              .map((b) => b.time),
+          }),
+        })),
+      );
+    }
+  }
 
   const awaitingPayment = upcoming.filter(
     (r) => r.paymentStatus === "pending" && r.paymentProvider !== "manual",
@@ -148,21 +206,30 @@ export default async function PatientDashboard() {
                     )}
                   </p>
                 </div>
-                <div className="flex flex-wrap items-center gap-3">
-                  <Badge variant={statusVariant[row.status]}>{statusLabel[row.status]}</Badge>
-                  {row.paymentStatus === "pending" && row.paymentProvider !== "manual" && (
-                    <PaymentCheckout
+                <div className="flex flex-col items-stretch gap-3 sm:items-end">
+                  <div className="flex flex-wrap items-center gap-3">
+                    <Badge variant={statusVariant[row.status]}>{statusLabel[row.status]}</Badge>
+                    {row.paymentStatus === "pending" && row.paymentProvider !== "manual" && (
+                      <PaymentCheckout
+                        appointmentId={row.id}
+                        amount={String(row.paymentAmount ?? row.fee)}
+                        currency={row.paymentCurrency ?? "INR"}
+                      />
+                    )}
+                    <form action={cancelAppointment}>
+                      <input type="hidden" name="appointmentId" value={row.id} />
+                      <Button variant="outline" size="sm" type="submit">
+                        Cancel
+                      </Button>
+                    </form>
+                  </div>
+                  {(rescheduleDays.get(row.id) ?? []).some((d) => d.times.length > 0) && (
+                    <RescheduleAppointment
                       appointmentId={row.id}
-                      amount={String(row.paymentAmount ?? row.fee)}
-                      currency={row.paymentCurrency ?? "INR"}
+                      currentLabel={`${formatDate(row.date)} at ${formatTime(row.time)}`}
+                      days={rescheduleDays.get(row.id)!}
                     />
                   )}
-                  <form action={cancelAppointment}>
-                    <input type="hidden" name="appointmentId" value={row.id} />
-                    <Button variant="outline" size="sm" type="submit">
-                      Cancel
-                    </Button>
-                  </form>
                 </div>
               </div>
             ))

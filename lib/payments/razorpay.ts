@@ -4,6 +4,7 @@ import type {
   CreateRefundInput,
   PaymentProvider,
   ProviderOrder,
+  ProviderPayment,
   ProviderPaymentEvent,
   ProviderRefund,
 } from "./types";
@@ -111,6 +112,46 @@ class RazorpayProvider implements PaymentProvider {
     };
   }
 
+  /** Reads the payment's authoritative state back from the gateway. Returns
+   * null when the payment is unknown to this account or the gateway is down. */
+  async fetchPayment(providerPaymentId: string): Promise<ProviderPayment | null> {
+    const auth = Buffer.from(`${this.keyId}:${this.keySecret}`).toString("base64");
+    try {
+      const response = await fetch(
+        `https://api.razorpay.com/v1/payments/${encodeURIComponent(providerPaymentId)}`,
+        { headers: { Authorization: `Basic ${auth}` } },
+      );
+      const payload: unknown = await response.json();
+      if (!response.ok || !isRecord(payload)) return null;
+
+      const id = readString(payload, "id");
+      const orderId = readString(payload, "order_id");
+      const status = readString(payload, "status");
+      if (!id || !orderId || !status) return null;
+
+      const notesRaw = payload.notes;
+      const notes = isRecord(notesRaw)
+        ? Object.entries(notesRaw).reduce<Record<string, string>>((acc, [key, value]) => {
+            if (typeof value === "string") acc[key] = value;
+            return acc;
+          }, {})
+        : undefined;
+
+      return {
+        id,
+        orderId,
+        status,
+        captured: payload.captured === true || status === "captured",
+        amountMinor: readNumber(payload, "amount") ?? 0,
+        currency: readString(payload, "currency") ?? "INR",
+        notes,
+        errorDescription: readString(payload, "error_description") ?? undefined,
+      };
+    } catch {
+      return null;
+    }
+  }
+
   verifyWebhook(rawBody: string, signature: string): boolean {
     if (!signature || !this.webhookSecret) return false;
     const expected = createHmac("sha256", this.webhookSecret).update(rawBody).digest("hex");
@@ -204,6 +245,9 @@ export const manualProvider: PaymentProvider = {
   },
   async createRefund(): Promise<ProviderRefund> {
     throw new Error("Online refunds are not configured.");
+  },
+  async fetchPayment(): Promise<ProviderPayment | null> {
+    return null;
   },
   verifyWebhook(): boolean {
     return false;

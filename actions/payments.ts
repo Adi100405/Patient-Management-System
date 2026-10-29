@@ -1,11 +1,12 @@
 "use server";
 
-import { eq } from "drizzle-orm";
+import { and, eq } from "drizzle-orm";
 import { revalidatePath } from "next/cache";
 import { getDb } from "@/db";
 import { appointments, payments } from "@/db/schema";
 import { requireSession } from "@/lib/session";
 import { getPaymentProvider, PAYMENT_HOLD_MINUTES } from "@/lib/payments";
+import { confirmPayment, failPayment } from "@/lib/payments/ledger";
 import { releaseExpiredPayments } from "@/lib/payments/expire";
 
 export type CreatePaymentOrderState = {
@@ -119,4 +120,139 @@ export async function createPaymentOrder(
       error instanceof Error ? error.message : "Could not start the payment. Please try again.";
     return { error: message };
   }
+}
+
+export type ConfirmCheckoutInput = { razorpayPaymentId: string };
+export type ConfirmCheckoutResult =
+  | { ok: true }
+  | { ok: false; error: string; notYet?: boolean };
+
+/** How long to wait for the gateway to settle a capture it accepted but has
+ * not yet reported as captured — racing the checkout's close by a few hundred
+ * milliseconds is normal. */
+const CONFIRM_RECHECKS = 3;
+const CONFIRM_RECHECK_WAIT_MS = 700;
+
+/**
+ * Looks up the ledger row a gateway payment should land on: first by the exact
+ * order id (the normal path), then by the appointment id the payment echoes in
+ * its notes, which reconciles a capture made against an order superseded by a
+ * re-opened checkout.
+ */
+async function findLedgerPayment(
+  orderId: string,
+  appointmentId: number | undefined,
+): Promise<typeof payments.$inferSelect | null> {
+  const db = getDb();
+  const [byOrder] = await db
+    .select()
+    .from(payments)
+    .where(eq(payments.providerOrderId, orderId))
+    .limit(1);
+  if (byOrder) return byOrder;
+
+  if (appointmentId === undefined || appointmentId <= 0) return null;
+  const [reused] = await db
+    .select()
+    .from(payments)
+    .where(and(eq(payments.appointmentId, appointmentId), eq(payments.status, "pending")))
+    .limit(1);
+  return reused ?? null;
+}
+
+function recheckWait(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+/**
+ * Confirms a payment the browser checkout says has succeeded — without
+ * trusting the browser: the server asks the gateway about that payment id and
+ * only settles the ledger when the gateway reports money actually captured,
+ * for the amount the appointment is owed. The success screen is a hint, never
+ * the truth. The webhook route (still merged, still signature-checked)
+ * becomes a backstop rather than a dependency.
+ */
+export async function confirmCheckout(
+  input: ConfirmCheckoutInput,
+): Promise<ConfirmCheckoutResult> {
+  const session = await requireSession();
+  if (session.role !== "patient") {
+    return { ok: false, error: "Only patients can confirm payments." };
+  }
+
+  const reference = typeof input?.razorpayPaymentId === "string" ? input.razorpayPaymentId : "";
+  if (!/^[A-Za-z0-9_-]{6,64}$/.test(reference)) {
+    return { ok: false, error: "The gateway did not return a usable payment reference." };
+  }
+
+  const provider = getPaymentProvider();
+  if (provider.name === "manual") {
+    return { ok: false, error: "Online payments are not configured." };
+  }
+
+  let entity = await provider.fetchPayment(reference);
+  for (
+    let rechecks = 0;
+    entity && !entity.captured && entity.status !== "failed" && rechecks < CONFIRM_RECHECKS;
+    rechecks += 1
+  ) {
+    await recheckWait(CONFIRM_RECHECK_WAIT_MS);
+    entity = await provider.fetchPayment(reference);
+  }
+
+  if (!entity) {
+    return {
+      ok: false,
+      error: "Could not verify the payment with the gateway. Refresh and try again.",
+    };
+  }
+
+  const notesAppointmentIdRaw = Number(entity.notes?.appointmentId ?? 0);
+  const notesAppointmentId =
+    Number.isInteger(notesAppointmentIdRaw) && notesAppointmentIdRaw > 0
+      ? notesAppointmentIdRaw
+      : undefined;
+
+  const payment = await findLedgerPayment(entity.orderId, notesAppointmentId);
+  if (!payment) {
+    return { ok: false, error: "This payment does not match an appointment in Medrella." };
+  }
+  if (payment.patientId !== session.profileId) {
+    return { ok: false, error: "This payment does not belong to you." };
+  }
+  if (payment.status === "succeeded") return { ok: true };
+  if (payment.status !== "pending") {
+    return { ok: false, error: "This appointment's payment is no longer pending." };
+  }
+
+  if (entity.status === "failed") {
+    await failPayment(
+      payment.id,
+      payment.appointmentId,
+      entity.id,
+      entity.errorDescription ?? "payment_failed",
+    );
+    revalidatePath("/dashboard/patient");
+    return { ok: false, error: "The payment failed. You can try again." };
+  }
+
+  if (!entity.captured) {
+    return {
+      ok: false,
+      error: "The gateway is still settling the payment — refresh in a few seconds.",
+      notYet: true,
+    };
+  }
+
+  const amountMinor = Math.round(Number(payment.amount) * 100);
+  if (entity.amountMinor !== amountMinor || entity.currency !== payment.currency) {
+    return {
+      ok: false,
+      error: "The gateway recorded a different amount for this payment. Refresh and try again.",
+    };
+  }
+
+  await confirmPayment(payment.id, payment.appointmentId, entity.id);
+  revalidatePath("/dashboard/patient");
+  return { ok: true };
 }

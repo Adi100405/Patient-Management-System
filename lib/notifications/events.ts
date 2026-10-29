@@ -2,6 +2,7 @@ import { notify } from "./index";
 import { appointmentMailContext } from "./context";
 import {
   appointmentCancelled,
+  appointmentRescheduled,
   bookingConfirmed,
   paymentConfirmed,
   refundUpdate,
@@ -28,6 +29,18 @@ export async function sendBookingConfirmation(
   if (!ctx) return;
   const content = bookingConfirmed(ctx, options);
   await notify({ to: ctx.patientEmail, ...content, meta: { kind: "booking_confirmed" } });
+}
+
+/** Called after the appointment row already carries the new slot, so the
+ * context reads the new time; the old one travels in `options`. */
+export async function sendRescheduleNotice(
+  appointmentId: number,
+  options: { previousDate: string; previousTime: string },
+) {
+  const ctx = await contextFor(appointmentId);
+  if (!ctx) return;
+  const content = appointmentRescheduled(ctx, options);
+  await notify({ to: ctx.patientEmail, ...content, meta: { kind: "appointment_rescheduled" } });
 }
 
 export async function sendPaymentConfirmation(appointmentId: number) {
