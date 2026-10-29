@@ -4,6 +4,7 @@ import Link from "next/link";
 import { useActionState, useState } from "react";
 import { bookAppointment, type BookingState } from "@/actions/booking";
 import { Button } from "@/components/ui/button";
+import { PaymentCheckout } from "@/components/payment-checkout";
 import { Textarea } from "@/components/ui/textarea";
 import { formatDate, formatTime } from "@/lib/utils";
 
@@ -28,17 +29,40 @@ export function SlotPicker({
   const selectedSlot = slots.find((slot) => slot.time === selected);
 
   if (state?.message) {
+    // Read the time from the picked value, not from `slots`: the booking
+    // revalidates the page and the slot we just took is no longer offered.
+    const time = selected ? formatTime(selected) : "";
+    const awaitingPayment = state.payment?.online === true && state.appointmentId !== undefined;
+
     return (
       <div className="space-y-3 rounded-lg border border-teal-200 bg-teal-50 p-4">
-        <p className="text-sm font-medium text-teal-900">Appointment confirmed 🎉</p>
-        <p className="text-sm text-teal-800">
-          {formatDate(date)} at {formatTime(state.message.split(" at ")[1] ?? "")}
+        <p className="text-sm font-medium text-teal-900">
+          {awaitingPayment ? "Slot held — complete payment to confirm" : "Appointment booked 🎉"}
         </p>
-        <Link href="/dashboard/patient">
-          <Button size="sm" type="button">
-            Go to my appointments
-          </Button>
-        </Link>
+        <p className="text-sm text-teal-800">
+          {formatDate(date)} at {time}
+        </p>
+        {awaitingPayment && state.appointmentId !== undefined && state.payment ? (
+          <>
+            <p className="text-xs text-teal-800">
+              Pay within 15 minutes or the slot is released for other patients.
+            </p>
+            <PaymentCheckout
+              appointmentId={state.appointmentId}
+              amount={state.payment.amount}
+              currency={state.payment.currency}
+            />
+            <Link href="/dashboard/patient" className="block text-xs font-medium text-teal-700 hover:underline">
+              Pay later from my appointments
+            </Link>
+          </>
+        ) : (
+          <Link href="/dashboard/patient">
+            <Button size="sm" type="button">
+              Go to my appointments
+            </Button>
+          </Link>
+        )}
       </div>
     );
   }
