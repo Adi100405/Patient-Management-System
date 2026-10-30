@@ -22,7 +22,7 @@ export type AvailabilityRow = {
 };
 
 const selectClass =
-  "flex h-10 w-full rounded-lg border border-slate-300 bg-white px-3 text-sm text-slate-900 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-teal-500";
+  "flex h-10 w-full rounded-xl border border-cream-300 bg-white px-3 text-sm text-ink-900 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-teal-600";
 
 export function AvailabilityManager({
   windows,
@@ -40,7 +40,7 @@ export function AvailabilityManager({
   return (
     <div className="space-y-5">
       {windows.length === 0 ? (
-        <p className="rounded-lg bg-amber-50 p-4 text-sm text-amber-800">
+        <p className="rounded-xl border border-amber-200 bg-amber-50 p-4 text-sm text-amber-800">
           You haven&apos;t published any availability yet, so patients can&apos;t book you.
           Add your first window below.
         </p>
@@ -49,18 +49,18 @@ export function AvailabilityManager({
           {windows.map((window) => (
             <li
               key={window.id}
-              className="flex flex-col gap-2 rounded-lg border border-slate-200 p-3 sm:flex-row sm:items-center sm:justify-between"
+              className="flex flex-col gap-2 rounded-xl border border-cream-200 p-3 sm:flex-row sm:items-center sm:justify-between"
             >
               <div>
-                <p className="text-sm font-medium text-slate-900">
+                <p className="text-sm font-medium text-ink-900">
                   {DAYS[window.dayOfWeek]} · {formatTime(window.startTime)} –{" "}
                   {formatTime(window.endTime)}
                 </p>
-                <p className="text-xs text-slate-500">{window.slotMinutes} minute slots</p>
+                <p className="text-xs text-ink-500">{window.slotMinutes} minute slots</p>
               </div>
 
               {locked.has(window.id) ? (
-                <span className="text-xs font-medium text-slate-500">
+                <span className="text-xs font-medium text-ink-500">
                   Has upcoming bookings — cancel them to remove
                 </span>
               ) : (
@@ -77,16 +77,16 @@ export function AvailabilityManager({
       )}
 
       {state?.message && (
-        <p className="rounded-lg bg-teal-50 p-3 text-sm text-teal-800">{state.message}</p>
+        <p className="rounded-xl border border-teal-200 bg-teal-50 p-3 text-sm text-teal-800">{state.message}</p>
       )}
       {state?.error && (
-        <p className="rounded-lg bg-rose-50 p-3 text-sm text-rose-700">{state.error}</p>
+        <p className="rounded-xl border border-rose-200 bg-rose-50 p-3 text-sm text-rose-700">{state.error}</p>
       )}
 
       <form
         key={windows.length}
         action={formAction}
-        className="grid gap-3 rounded-lg border border-dashed border-slate-300 bg-slate-50 p-4 sm:grid-cols-5"
+        className="grid gap-3 rounded-xl border border-dashed border-cream-300 bg-cream-50/70 p-4 sm:grid-cols-5"
       >
         <div className="space-y-1.5 sm:col-span-2">
           <Label htmlFor="dayOfWeek">Day</Label>

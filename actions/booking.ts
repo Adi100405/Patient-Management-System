@@ -392,7 +392,15 @@ export async function rescheduleAppointment(
   const bookedRows = await db
     .select({ date: appointments.appointmentDate, time: appointments.appointmentTime })
     .from(appointments)
-    .where(eq(appointments.doctorId, appointment.doctorId));
+    .where(
+      and(
+        eq(appointments.doctorId, appointment.doctorId),
+        // Only live bookings hold a slot. Cancelled, completed and no-show rows
+        // must never block a patient from moving into that time later.
+        eq(appointments.status, "booked"),
+        eq(appointments.appointmentDate, date),
+      ),
+    );
   const bookedByDate = new Map<string, string[]>();
   for (const row of bookedRows) {
     bookedByDate.set(row.date, [...(bookedByDate.get(row.date) ?? []), row.time]);

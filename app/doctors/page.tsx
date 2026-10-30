@@ -31,7 +31,7 @@ export default async function DoctorsPage({
       <div className="flex flex-col gap-3 sm:flex-row sm:items-end sm:justify-between">
         <div>
           <h1 className="text-2xl font-semibold tracking-tight">Find a doctor</h1>
-          <p className="text-sm text-slate-600">
+          <p className="text-sm text-ink-600">
             {rows.length} {rows.length === 1 ? "doctor" : "doctors"} available
             {term ? ` for “${term}”` : ""}.
           </p>
@@ -47,7 +47,7 @@ export default async function DoctorsPage({
 
       {rows.length === 0 ? (
         <Card>
-          <CardContent className="py-10 text-center text-sm text-slate-600">
+          <CardContent className="py-10 text-center text-sm text-ink-600">
             No doctors matched that search. Try “cardiology”, “dermatology”, or a name.
             <div className="mt-4">
               <Link href="/doctors">
@@ -70,12 +70,12 @@ export default async function DoctorsPage({
                 <p className="text-sm font-medium text-teal-700">{doctor.specialization}</p>
               </CardHeader>
               <CardContent className="flex flex-1 flex-col justify-between gap-4">
-                <div className="space-y-1 text-sm text-slate-600">
+                <div className="space-y-1 text-sm text-ink-600">
                   <p>{doctor.experienceYears} years experience</p>
                   <p>{doctor.qualification ?? "MBBS"}</p>
                   <p>
                     Fee:{" "}
-                    <span className="font-medium text-slate-900">
+                    <span className="font-medium text-ink-900">
                       {formatCurrency(doctor.consultationFee)}
                     </span>
                   </p>

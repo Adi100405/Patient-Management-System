@@ -18,7 +18,7 @@ export function SignInForm() {
   return (
     <form action={formAction} className="space-y-4">
       {state?.error && (
-        <p className="rounded-lg bg-rose-50 p-3 text-sm text-rose-700">{state.error}</p>
+        <p className="rounded-xl border border-rose-200 bg-rose-50 p-3 text-sm text-rose-700">{state.error}</p>
       )}
 
       <div className="space-y-1.5">
@@ -43,7 +43,7 @@ export function SignInForm() {
         {pending ? "Signing in…" : "Sign in"}
       </Button>
 
-      <p className="text-center text-sm text-slate-600">
+      <p className="text-center text-sm text-ink-600">
         New here?{" "}
         <Link href="/sign-up" className="font-medium text-teal-700 hover:underline">
           Create an account
@@ -60,7 +60,7 @@ export function SignUpForm() {
   return (
     <form action={formAction} className="space-y-4">
       {state?.error && (
-        <p className="rounded-lg bg-rose-50 p-3 text-sm text-rose-700">{state.error}</p>
+        <p className="rounded-xl border border-rose-200 bg-rose-50 p-3 text-sm text-rose-700">{state.error}</p>
       )}
 
       <div className="space-y-1.5">
@@ -71,10 +71,10 @@ export function SignUpForm() {
               key={option}
               type="button"
               onClick={() => setRole(option)}
-              className={`rounded-lg border px-3 py-2 text-sm font-medium capitalize transition ${
+              className={`h-11 rounded-xl border px-3 text-sm font-medium capitalize transition-colors ${
                 role === option
-                  ? "border-teal-600 bg-teal-50 text-teal-800"
-                  : "border-slate-300 bg-white text-slate-700 hover:bg-slate-50"
+                  ? "border-teal-700 bg-teal-50 text-teal-800"
+                  : "border-cream-300 bg-white text-ink-700 hover:bg-cream-100"
               }`}
             >
               {option}
@@ -110,8 +110,8 @@ export function SignUpForm() {
       </div>
 
       {role === "doctor" ? (
-        <div className="space-y-4 rounded-lg border border-slate-200 bg-slate-50 p-4">
-          <p className="text-xs font-medium uppercase tracking-wide text-slate-500">
+        <div className="space-y-4 rounded-xl border border-cream-200 bg-cream-50/70 p-4">
+          <p className="text-xs font-medium uppercase tracking-wide text-ink-500">
             Doctor details
           </p>
           <div className="space-y-1.5">
@@ -146,7 +146,7 @@ export function SignUpForm() {
         {pending ? "Creating account…" : "Create account"}
       </Button>
 
-      <p className="text-center text-sm text-slate-600">
+      <p className="text-center text-sm text-ink-600">
         Already registered?{" "}
         <Link href="/sign-in" className="font-medium text-teal-700 hover:underline">
           Sign in

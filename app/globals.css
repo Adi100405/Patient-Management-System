@@ -3,6 +3,19 @@
 @theme {
   --font-sans: var(--font-geist-sans), ui-sans-serif, system-ui, sans-serif;
   --font-mono: var(--font-geist-mono), ui-monospace, monospace;
+
+  /* One warm, human palette: ivory paper, ink text, teal care accent.
+     The product is a patient–doctor relationship, not a cold admin console. */
+  --color-cream-50: #fbf9f5;
+  --color-cream-100: #f4efe7;
+  --color-cream-200: #e9e2d6;
+  --color-cream-300: #d9d0c1;
+
+  --color-ink-900: #211d18;
+  --color-ink-800: #322c25;
+  --color-ink-700: #4b4339;
+  --color-ink-600: #645b4f;
+  --color-ink-500: #7a7164;
 }
 
 html {
@@ -10,7 +23,22 @@ html {
 }
 
 body {
-  background-color: #f8fafc;
-  color: #0f172a;
+  background-color: var(--color-cream-50);
+  color: var(--color-ink-900);
   -webkit-font-smoothing: antialiased;
+}
+
+/* One soft focus treatment everywhere, so keyboard users see the same care. */
+:focus-visible {
+  outline: 2px solid #0f766e;
+  outline-offset: 2px;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    transition-duration: 0.01ms !important;
+  }
 }

@@ -18,10 +18,10 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
       <body className={`${geistSans.variable} ${geistMono.variable} font-sans`}>
         <SiteHeader />
         <main className="mx-auto w-full max-w-6xl px-4 py-8">{children}</main>
-        <footer className="mt-16 border-t border-slate-200 bg-white">
-          <div className="mx-auto flex max-w-6xl flex-col gap-1 px-4 py-6 text-sm text-slate-500 sm:flex-row sm:items-center sm:justify-between">
-            <p>© {new Date().getFullYear()} Medrella · Patient Management System</p>
-            <p>Built with Next.js, Drizzle ORM & Neon Postgres</p>
+        <footer className="mt-16 border-t border-cream-200 bg-white/60">
+          <div className="mx-auto flex max-w-6xl flex-col gap-1 px-4 py-6 text-sm text-ink-500 sm:flex-row sm:items-center sm:justify-between">
+            <p>© {new Date().getFullYear()} Medrella · Care, one appointment at a time</p>
+            <p className="text-ink-500/80">Patient Management System</p>
           </div>
         </footer>
       </body>
