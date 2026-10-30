@@ -1,6 +1,7 @@
 "use client";
 
 import { useActionState, useEffect, useRef, useState } from "react";
+import Link from "next/link";
 import { useRouter } from "next/navigation";
 import {
   confirmCheckout,
@@ -102,7 +103,7 @@ function useCheckoutScript(): { ready: boolean; failed: boolean; retry: () => vo
   };
 }
 
-type Phase = "idle" | "confirming" | "dismissed";
+type Phase = "idle" | "confirming" | "confirmed" | "dismissed";
 
 export function PaymentCheckout({
   appointmentId,
@@ -151,7 +152,9 @@ export function PaymentCheckout({
         };
       }
       if (result.ok) {
-        setPhase("idle");
+        // Forward to the receipt: the payment is settled, so the patient's
+        // next step is proof of payment, not a dashboard re-render.
+        setPhase("confirmed");
         router.refresh();
         return;
       }
@@ -194,6 +197,16 @@ export function PaymentCheckout({
     checkout.open();
   }, [order, ready, router, attempt]);
 
+  // A short beat on the success panel (so the confirmation registers), then
+  // straight to the receipt — from the dashboard or the doctor page alike.
+  useEffect(() => {
+    if (phase !== "confirmed" || !order?.paymentId) return;
+    const timer = setTimeout(() => {
+      router.push(`/dashboard/patient/receipts/${order.paymentId}`);
+    }, 1_400);
+    return () => clearTimeout(timer);
+  }, [phase, order?.paymentId, router]);
+
   if (state?.error) {
     return (
       <div className="flex items-start gap-2.5 rounded-xl border border-rose-200 bg-rose-50 p-3.5 text-sm text-rose-800">
@@ -202,6 +215,30 @@ export function PaymentCheckout({
           <p className="font-medium">We could not start the payment</p>
           <p className="text-xs text-rose-700">{state.error}</p>
         </div>
+      </div>
+    );
+  }
+
+  if (phase === "confirmed") {
+    const receiptHref = order?.paymentId ? `/dashboard/patient/receipts/${order.paymentId}` : null;
+    return (
+      <div
+        role="status"
+        className="space-y-1.5 rounded-xl border border-teal-200 bg-teal-50 p-3.5 text-sm text-teal-900"
+      >
+        <p className="flex items-center gap-2 font-medium">
+          <CheckIcon className="h-4 w-4 text-teal-700" />
+          Payment confirmed
+        </p>
+        <p className="text-xs text-teal-800">Your appointment is booked. Opening your receipt…</p>
+        {receiptHref && (
+          <Link
+            href={receiptHref}
+            className="inline-block text-xs font-semibold text-teal-700 underline-offset-2 hover:underline"
+          >
+            View receipt now
+          </Link>
+        )}
       </div>
     );
   }
@@ -303,6 +340,18 @@ function CardIcon({ className }: { className?: string }) {
   return (
     <svg viewBox="0 0 20 20" fill="currentColor" aria-hidden="true" className={className}>
       <path d="M2.5 5.5A2.5 2.5 0 0 1 5 3h10a2.5 2.5 0 0 1 2.5 2.5V7h-15V5.5ZM2.5 8.5h15v6A2.5 2.5 0 0 1 15 17H5a2.5 2.5 0 0 1-2.5-2.5v-6Zm3 4.25a.75.75 0 0 1 .75-.75h2.5a.75.75 0 0 1 0 1.5h-2.5a.75.75 0 0 1-.75-.75Z" />
+    </svg>
+  );
+}
+
+function CheckIcon({ className }: { className?: string }) {
+  return (
+    <svg viewBox="0 0 20 20" fill="currentColor" aria-hidden="true" className={className}>
+      <path
+        fillRule="evenodd"
+        d="M10 18a8 8 0 1 0 0-16 8 8 0 0 0 0 16Zm3.7-9.3a1 1 0 0 0-1.4-1.4L9 10.6 7.7 9.3a1 1 0 0 0-1.4 1.4l2 2a1 1 0 0 0 1.4 0l4-4Z"
+        clipRule="evenodd"
+      />
     </svg>
   );
 }

@@ -246,6 +246,14 @@ export default async function PatientDashboard() {
                       currency={row.paymentCurrency ?? "INR"}
                     />
                   )}
+                  {row.paymentStatus === "succeeded" && row.paymentId !== null && (
+                    <Link
+                      href={`/dashboard/patient/receipts/${row.paymentId}`}
+                      className="rounded-xl px-3 py-1.5 text-sm font-medium text-teal-700 transition-colors hover:bg-teal-50"
+                    >
+                      Receipt
+                    </Link>
+                  )}
                   <form action={cancelAppointment}>
                     <input type="hidden" name="appointmentId" value={row.id} />
                     <Button variant="ghost" size="sm" type="submit">
