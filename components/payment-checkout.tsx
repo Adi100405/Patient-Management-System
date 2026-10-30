@@ -9,6 +9,7 @@ import {
   type CreatePaymentOrderState,
 } from "@/actions/payments";
 import { Button } from "@/components/ui/button";
+import { formatCurrency } from "@/lib/utils";
 
 type RazorpayOptions = {
   key: string;
@@ -194,20 +195,38 @@ export function PaymentCheckout({
   }, [order, ready, router, attempt]);
 
   if (state?.error) {
-    return <p className="text-sm text-rose-600">{state.error}</p>;
+    return (
+      <div className="flex items-start gap-2.5 rounded-xl border border-rose-200 bg-rose-50 p-3.5 text-sm text-rose-800">
+        <span aria-hidden="true" className="mt-0.5 text-base leading-none">!</span>
+        <div>
+          <p className="font-medium">We could not start the payment</p>
+          <p className="text-xs text-rose-700">{state.error}</p>
+        </div>
+      </div>
+    );
   }
 
   if (phase === "confirming") {
-    return <p className="text-sm text-teal-700">Payment received — confirming your booking…</p>;
+    return (
+      <div role="status" className="flex items-start gap-2.5 rounded-xl border border-teal-200 bg-teal-50 p-3.5 text-sm text-teal-900">
+        <Spinner className="mt-0.5 h-4 w-4 text-teal-700" />
+        <div>
+          <p className="font-medium">Payment received</p>
+          <p className="text-xs text-teal-800">
+            Verifying the capture with the payment gateway and confirming your appointment…
+          </p>
+        </div>
+      </div>
+    );
   }
 
   if (order && failed) {
     return (
-      <div className="space-y-1">
-        <p className="text-sm text-rose-600">The payment window could not load.</p>
-        <p className="text-xs text-slate-600">
-          This is usually an ad-blocker or privacy extension blocking the payment provider. Allow
-          this site in your blocker, or try a different browser, then:
+      <div className="space-y-2.5 rounded-xl border border-amber-200 bg-amber-50 p-3.5">
+        <p className="text-sm font-medium text-amber-900">The payment window could not load</p>
+        <p className="text-xs text-amber-800">
+          This is usually an ad-blocker or privacy extension blocking the payment provider. Allow this
+          site in your blocker, or try a different browser, then retry. Your slot stays held meanwhile.
         </p>
         <Button size="sm" type="button" onClick={retry}>
           Try again
@@ -219,9 +238,10 @@ export function PaymentCheckout({
   if (order) {
     if (phase === "dismissed") {
       return (
-        <div className="space-y-1">
-          <p className="text-sm text-slate-600">
-            Payment not completed — this slot is held for a short while.
+        <div className="space-y-2.5 rounded-xl border border-cream-200 bg-white p-3.5">
+          <p className="text-sm font-medium text-ink-800">Payment not completed</p>
+          <p className="text-xs text-ink-500">
+            Your slot is still held for a short while. You can retry now, or pay at the clinic.
           </p>
           <Button
             size="sm"
@@ -237,15 +257,52 @@ export function PaymentCheckout({
         </div>
       );
     }
-    return <p className="text-sm text-slate-600">Opening secure checkout…</p>;
+    return (
+      <p role="status" className="flex items-center gap-2 text-sm text-ink-600">
+        <Spinner className="h-4 w-4 text-teal-700" />
+        Opening secure checkout…
+      </p>
+    );
   }
 
   return (
-    <form action={formAction}>
+    <form action={formAction} className="space-y-2">
       <input type="hidden" name="appointmentId" value={appointmentId} />
-      <Button type="submit" size="sm" disabled={pending}>
-        {pending ? "Preparing…" : `Pay ${Number(amount)} ${currency}`}
+      <Button
+        type="submit"
+        size="sm"
+        disabled={pending}
+        aria-label={`Pay ${formatCurrency(amount)} ${currency} for this appointment`}
+      >
+        {pending ? (
+          <>
+            <Spinner className="h-3.5 w-3.5" /> Preparing…
+          </>
+        ) : (
+          <>
+            <CardIcon className="h-3.5 w-3.5" />
+            Pay {formatCurrency(amount)}
+          </>
+        )}
       </Button>
+      <p className="text-[11px] text-ink-500">Slot held for 15 minutes while you pay.</p>
     </form>
+  );
+}
+
+function Spinner({ className }: { className?: string }) {
+  return (
+    <svg viewBox="0 0 24 24" fill="none" aria-hidden="true" className={`animate-spin ${className ?? ""}`}>
+      <circle cx="12" cy="12" r="9" stroke="currentColor" strokeOpacity="0.25" strokeWidth="3" />
+      <path d="M21 12a9 9 0 0 0-9-9" stroke="currentColor" strokeWidth="3" strokeLinecap="round" />
+    </svg>
+  );
+}
+
+function CardIcon({ className }: { className?: string }) {
+  return (
+    <svg viewBox="0 0 20 20" fill="currentColor" aria-hidden="true" className={className}>
+      <path d="M2.5 5.5A2.5 2.5 0 0 1 5 3h10a2.5 2.5 0 0 1 2.5 2.5V7h-15V5.5ZM2.5 8.5h15v6A2.5 2.5 0 0 1 15 17H5a2.5 2.5 0 0 1-2.5-2.5v-6Zm3 4.25a.75.75 0 0 1 .75-.75h2.5a.75.75 0 0 1 0 1.5h-2.5a.75.75 0 0 1-.75-.75Z" />
+    </svg>
   );
 }

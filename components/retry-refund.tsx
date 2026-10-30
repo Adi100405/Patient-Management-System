@@ -12,7 +12,7 @@ export function RetryRefundButton({ refundId }: { refundId: number }) {
   const [state, formAction, pending] = useActionState<RetryRefundState, FormData>(retryRefund, null);
 
   if (state?.message) {
-    return <span className="text-xs text-slate-600">{state.message}</span>;
+    return <span className="text-xs text-ink-600">{state.message}</span>;
   }
 
   return (
@@ -21,9 +21,9 @@ export function RetryRefundButton({ refundId }: { refundId: number }) {
       <button
         type="submit"
         disabled={pending}
-        className="text-xs font-medium text-teal-700 underline-offset-2 hover:underline disabled:text-slate-400"
+        className="text-xs font-medium text-teal-700 underline-offset-2 hover:underline disabled:text-ink-500/50"
       >
-        {pending ? "Retrying…" : "Retry refund"}
+        {pending ? "Retrying." : "Retry refund"}
       </button>
       {state?.error && <span className="text-xs text-rose-600">{state.error}</span>}
     </form>

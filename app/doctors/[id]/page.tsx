@@ -112,27 +112,27 @@ export default async function DoctorProfilePage({
               <Badge variant="booked">Verified doctor</Badge>
             </div>
           </CardHeader>
-          <CardContent className="space-y-5 text-sm text-slate-600">
+          <CardContent className="space-y-5 text-sm text-ink-600">
             <p>
               {doctor.bio ??
                 `${doctor.fullName} is a ${doctor.specialization.toLowerCase()} specialist with ${doctor.experienceYears} years of clinical experience.`}
             </p>
             <dl className="grid grid-cols-2 gap-4">
               <div>
-                <dt className="text-xs uppercase tracking-wide text-slate-500">Experience</dt>
-                <dd className="font-medium text-slate-900">{doctor.experienceYears} years</dd>
+                <dt className="text-xs uppercase tracking-wide text-ink-500">Experience</dt>
+                <dd className="font-medium text-ink-900">{doctor.experienceYears} years</dd>
               </div>
               <div>
-                <dt className="text-xs uppercase tracking-wide text-slate-500">Qualification</dt>
-                <dd className="font-medium text-slate-900">{doctor.qualification ?? "MBBS"}</dd>
+                <dt className="text-xs uppercase tracking-wide text-ink-500">Qualification</dt>
+                <dd className="font-medium text-ink-900">{doctor.qualification ?? "MBBS"}</dd>
               </div>
               <div>
-                <dt className="text-xs uppercase tracking-wide text-slate-500">Consultation fee</dt>
-                <dd className="font-medium text-slate-900">{formatCurrency(doctor.consultationFee)}</dd>
+                <dt className="text-xs uppercase tracking-wide text-ink-500">Consultation fee</dt>
+                <dd className="font-medium text-ink-900">{formatCurrency(doctor.consultationFee)}</dd>
               </div>
               <div>
-                <dt className="text-xs uppercase tracking-wide text-slate-500">Consulting days</dt>
-                <dd className="font-medium text-slate-900">
+                <dt className="text-xs uppercase tracking-wide text-ink-500">Consulting days</dt>
+                <dd className="font-medium text-ink-900">
                   {windows.length > 0
                     ? [...new Set(windows.map((w) => ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"][w.dayOfWeek]))].join(", ")
                     : "Not set"}
@@ -141,14 +141,14 @@ export default async function DoctorProfilePage({
             </dl>
 
             {windows.length > 0 && (
-              <div className="rounded-lg bg-slate-50 p-4">
-                <p className="text-xs uppercase tracking-wide text-slate-500">Weekly availability</p>
+              <div className="rounded-xl border border-cream-200 bg-cream-50/70 p-4">
+                <p className="text-xs uppercase tracking-wide text-ink-500">Weekly availability</p>
                 <ul className="mt-2 space-y-1">
                   {windows.map((w) => (
-                    <li key={w.id} className="text-sm text-slate-700">
+                    <li key={w.id} className="text-sm text-ink-700">
                       {["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"][w.dayOfWeek]} ·{" "}
                       {formatTime(w.startTime)} – {formatTime(w.endTime)}{" "}
-                      <span className="text-slate-500">({w.slotMinutes} min slots)</span>
+                      <span className="text-ink-500">({w.slotMinutes} min slots)</span>
                     </li>
                   ))}
                 </ul>
@@ -160,11 +160,11 @@ export default async function DoctorProfilePage({
         <Card>
           <CardHeader>
             <CardTitle>Book an appointment</CardTitle>
-            <p className="text-sm text-slate-500">Choose a day, then pick a free slot.</p>
+            <p className="text-sm text-ink-500">Choose a day, then pick a free slot.</p>
           </CardHeader>
           <CardContent className="space-y-4">
             {dayOptions.length === 0 ? (
-              <p className="text-sm text-slate-600">
+              <p className="text-sm text-ink-600">
                 This doctor has not published availability yet. Please check back later.
               </p>
             ) : (
@@ -175,10 +175,10 @@ export default async function DoctorProfilePage({
                       key={day.date}
                       href={`/doctors/${doctor.id}?date=${day.date}`}
                       className={cn(
-                        "rounded-lg border px-3 py-1.5 text-xs font-medium",
+                        "rounded-xl border px-3 py-2 text-xs font-medium transition-colors",
                         day.date === activeDay?.date
-                          ? "border-teal-600 bg-teal-600 text-white"
-                          : "border-slate-300 bg-white text-slate-700 hover:bg-slate-50",
+                          ? "border-teal-700 bg-teal-700 text-white"
+                          : "border-cream-300 bg-white text-ink-700 hover:border-teal-300 hover:bg-teal-50/50",
                       )}
                     >
                       {day.isToday ? "Today" : formatDate(day.date)}
@@ -190,7 +190,7 @@ export default async function DoctorProfilePage({
                 </div>
 
                 {session?.role === "doctor" ? (
-                  <p className="rounded-lg bg-amber-50 p-3 text-sm text-amber-800">
+                  <p className="rounded-xl border border-amber-200 bg-amber-50 p-3 text-sm text-amber-800">
                     You are signed in as a doctor. Sign in with a patient account to book.
                   </p>
                 ) : activeDay ? (
@@ -208,7 +208,7 @@ export default async function DoctorProfilePage({
       </div>
 
       {!session && (
-        <p className="text-sm text-slate-600">
+        <p className="text-sm text-ink-600">
           New here?{" "}
           <Link href="/sign-up" className="font-medium text-teal-700 hover:underline">
             Create a patient account

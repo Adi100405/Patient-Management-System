@@ -35,7 +35,7 @@ export function SlotPicker({
     const awaitingPayment = state.payment?.online === true && state.appointmentId !== undefined;
 
     return (
-      <div className="space-y-3 rounded-lg border border-teal-200 bg-teal-50 p-4">
+      <div className="space-y-3 rounded-xl border border-teal-200 bg-teal-50 p-4">
         <p className="text-sm font-medium text-teal-900">
           {awaitingPayment ? "Slot held — complete payment to confirm" : "Appointment booked 🎉"}
         </p>
@@ -69,7 +69,7 @@ export function SlotPicker({
 
   if (slots.length === 0) {
     return (
-      <p className="rounded-lg bg-slate-50 p-4 text-sm text-slate-600">
+      <p className="rounded-xl border border-cream-200 bg-cream-50/70 p-4 text-sm text-ink-600">
         No free slots left for {formatDate(date)}. Try another day.
       </p>
     );
@@ -83,10 +83,10 @@ export function SlotPicker({
             key={slot.time}
             type="button"
             onClick={() => setSelected(slot.time)}
-            className={`rounded-lg border px-2 py-2 text-xs font-medium transition ${
+            className={`h-11 rounded-xl border px-2 text-xs font-medium transition-colors ${
               selected === slot.time
-                ? "border-teal-600 bg-teal-600 text-white"
-                : "border-slate-300 bg-white text-slate-700 hover:border-teal-400 hover:bg-teal-50"
+                ? "border-teal-700 bg-teal-700 text-white shadow-sm"
+                : "border-cream-300 bg-white text-ink-800 hover:border-teal-400 hover:bg-teal-50/60"
             }`}
           >
             {formatTime(slot.time)}
@@ -95,12 +95,12 @@ export function SlotPicker({
       </div>
 
       {state?.error && (
-        <p className="rounded-lg bg-rose-50 p-3 text-sm text-rose-700">{state.error}</p>
+        <p className="rounded-xl border border-rose-200 bg-rose-50 p-3 text-sm text-rose-700">{state.error}</p>
       )}
 
       {!isSignedIn ? (
-        <div className="space-y-2 rounded-lg bg-slate-50 p-4">
-          <p className="text-sm text-slate-600">Sign in to confirm your appointment.</p>
+        <div className="space-y-2 rounded-xl border border-cream-200 bg-cream-50/70 p-4">
+          <p className="text-sm text-ink-600">Sign in to confirm your appointment.</p>
           <Link href="/sign-in">
             <Button size="sm" type="button">
               Sign in to book
@@ -123,7 +123,7 @@ export function SlotPicker({
           </Button>
         </form>
       ) : (
-        <p className="text-sm text-slate-500">Pick a slot above to continue.</p>
+        <p className="text-sm text-ink-500">Pick a slot above to continue.</p>
       )}
     </div>
   );

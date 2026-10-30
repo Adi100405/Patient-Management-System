@@ -97,7 +97,7 @@ export default async function ReceiptPage({
           <div className="flex flex-wrap items-start justify-between gap-3">
             <div>
               <CardTitle className="text-xl">Payment receipt</CardTitle>
-              <p className="text-sm text-slate-500">
+              <p className="text-sm text-ink-500">
                 Receipt RCPT-{String(row.paymentId).padStart(6, "0")} · Medrella Clinic
               </p>
             </div>
@@ -109,38 +109,38 @@ export default async function ReceiptPage({
         <CardContent className="space-y-6 text-sm">
           <dl className="grid gap-4 sm:grid-cols-2">
             <div>
-              <dt className="text-xs uppercase tracking-wide text-slate-500">Patient</dt>
-              <dd className="font-medium text-slate-900">{session.name}</dd>
+              <dt className="text-xs uppercase tracking-wide text-ink-500">Patient</dt>
+              <dd className="font-medium text-ink-900">{session.name}</dd>
             </div>
             <div>
-              <dt className="text-xs uppercase tracking-wide text-slate-500">Doctor</dt>
-              <dd className="font-medium text-slate-900">
+              <dt className="text-xs uppercase tracking-wide text-ink-500">Doctor</dt>
+              <dd className="font-medium text-ink-900">
                 Dr. {row.doctorName} · {row.specialization}
               </dd>
             </div>
             <div>
-              <dt className="text-xs uppercase tracking-wide text-slate-500">Appointment</dt>
-              <dd className="text-slate-800">
+              <dt className="text-xs uppercase tracking-wide text-ink-500">Appointment</dt>
+              <dd className="text-ink-800">
                 {formatDate(row.appointmentDate)} at {formatTime(row.appointmentTime)}
               </dd>
             </div>
             <div>
-              <dt className="text-xs uppercase tracking-wide text-slate-500">
+              <dt className="text-xs uppercase tracking-wide text-ink-500">
                 {row.paidAt ? "Paid on" : "Created"}
               </dt>
-              <dd className="text-slate-800">
+              <dd className="text-ink-800">
                 {formatDate(row.paidAt ?? row.createdAt)}
               </dd>
             </div>
             <div>
-              <dt className="text-xs uppercase tracking-wide text-slate-500">Consultation fee</dt>
-              <dd className="font-medium text-slate-900">
+              <dt className="text-xs uppercase tracking-wide text-ink-500">Consultation fee</dt>
+              <dd className="font-medium text-ink-900">
                 {formatCurrency(row.amount)} {row.currency}
               </dd>
             </div>
             <div>
-              <dt className="text-xs uppercase tracking-wide text-slate-500">Refunded</dt>
-              <dd className="font-medium text-slate-900">
+              <dt className="text-xs uppercase tracking-wide text-ink-500">Refunded</dt>
+              <dd className="font-medium text-ink-900">
                 {refunded > 0
                   ? `${formatCurrency(refunded)} ${row.currency}`
                   : refunding > 0
@@ -149,43 +149,43 @@ export default async function ReceiptPage({
               </dd>
             </div>
             <div>
-              <dt className="text-xs uppercase tracking-wide text-slate-500">Payment reference</dt>
-              <dd className="font-mono text-xs text-slate-700">{row.providerPaymentId ?? "—"}</dd>
+              <dt className="text-xs uppercase tracking-wide text-ink-500">Payment reference</dt>
+              <dd className="font-mono text-xs text-ink-700">{row.providerPaymentId ?? "—"}</dd>
             </div>
             <div>
-              <dt className="text-xs uppercase tracking-wide text-slate-500">Gateway</dt>
-              <dd className="text-slate-800">{row.provider}</dd>
+              <dt className="text-xs uppercase tracking-wide text-ink-500">Gateway</dt>
+              <dd className="text-ink-800">{row.provider}</dd>
             </div>
           </dl>
 
-          <div className="border-t border-slate-200 pt-4">
-            <h2 className="text-sm font-semibold text-slate-900">Refunds</h2>
+          <div className="border-t border-cream-200 pt-4">
+            <h2 className="text-sm font-semibold text-ink-900">Refunds</h2>
             {refunds.length === 0 ? (
-              <p className="mt-2 text-sm text-slate-600">No refunds recorded for this payment.</p>
+              <p className="mt-2 text-sm text-ink-600">No refunds recorded for this payment.</p>
             ) : (
               <ul className="mt-2 space-y-2">
                 {refunds.map((refund) => (
                   <li
                     key={refund.id}
-                    className="rounded-lg border border-slate-200 p-3 text-sm"
+                    className="rounded-xl border border-cream-200 p-3 text-sm"
                   >
                     <div className="flex flex-wrap items-center justify-between gap-2">
-                      <span className="font-medium text-slate-900">
+                      <span className="font-medium text-ink-900">
                         {formatCurrency(refund.amount)} {refund.currency}
                       </span>
                       <Badge variant={refund.status === "completed" ? "completed" : refund.status === "failed" ? "cancelled" : "no_show"}>
                         {refundStatusLabel[refund.status]}
                       </Badge>
                     </div>
-                    <p className="mt-1 text-xs text-slate-600">{refund.note ?? refund.reason}</p>
-                    <p className="mt-1 font-mono text-[11px] text-slate-500">
+                    <p className="mt-1 text-xs text-ink-600">{refund.note ?? refund.reason}</p>
+                    <p className="mt-1 font-mono text-[11px] text-ink-500">
                       {refund.providerRefundId ?? "awaiting gateway reference"}
                     </p>
                   </li>
                 ))}
               </ul>
             )}
-            <p className="mt-3 text-xs text-slate-500">
+            <p className="mt-3 text-xs text-ink-500">
               Refunds return to the original payment method. Banks typically take 3–5 working days
               after the gateway reports completion.
             </p>

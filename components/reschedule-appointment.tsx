@@ -13,19 +13,50 @@ export type RescheduleDayOption = {
   times: string[];
 };
 
+function CheckIcon({ className }: { className?: string }) {
+  return (
+    <svg viewBox="0 0 20 20" fill="currentColor" aria-hidden="true" className={className}>
+      <path
+        fillRule="evenodd"
+        d="M16.7 5.3a1 1 0 0 1 0 1.4l-7.5 7.5a1 1 0 0 1-1.4 0L3.3 9.7a1 1 0 1 1 1.4-1.4l3.8 3.8 6.8-6.8a1 1 0 0 1 1.4 0Z"
+        clipRule="evenodd"
+      />
+    </svg>
+  );
+}
+
+function AlertIcon({ className }: { className?: string }) {
+  return (
+    <svg viewBox="0 0 20 20" fill="currentColor" aria-hidden="true" className={className}>
+      <path
+        fillRule="evenodd"
+        d="M10 18a8 8 0 1 0 0-16 8 8 0 0 0 0 16Zm0-11.5a.75.75 0 0 1 .75.75v3.5a.75.75 0 0 1-1.5 0v-3.5A.75.75 0 0 1 10 6.5Zm0 8a1 1 0 1 0 0-2 1 1 0 0 0 0 2Z"
+        clipRule="evenodd"
+      />
+    </svg>
+  );
+}
+
 /**
  * Inline "move my appointment" picker for the patient dashboard. Days and free
  * slots are computed server-side (same availability logic as booking) and
  * passed in; the final say still belongs to the server action — if someone
  * takes the slot between render and submit, the patient is told honestly.
+ *
+ * When closed this is a single quiet action; when open the panel spans the row
+ * so the day strip and slot grid have room to breathe on a phone.
  */
 export function RescheduleAppointment({
   appointmentId,
   currentLabel,
+  currentDate,
+  currentTime,
   days,
 }: {
   appointmentId: number;
   currentLabel: string;
+  currentDate: string;
+  currentTime: string;
   days: RescheduleDayOption[];
 }) {
   const [open, setOpen] = useState(false);
@@ -33,103 +64,172 @@ export function RescheduleAppointment({
     rescheduleAppointment,
     null,
   );
-  const [dayIndex, setDayIndex] = useState(() => days.findIndex((d) => d.times.length > 0));
+  /** Slots this patient can actually move to (their own slot is not one). */
+  const selectableTimes = (option: RescheduleDayOption) =>
+    option.times.filter((time) => !(option.date === currentDate && time === currentTime));
+
+  const [dayIndex, setDayIndex] = useState(() =>
+    days.findIndex((d) => selectableTimes(d).length > 0),
+  );
   const [selected, setSelected] = useState<string | null>(null);
 
   const day = dayIndex >= 0 ? days[dayIndex] : undefined;
+  const isCurrentSlot = (date: string, time: string) =>
+    date === currentDate && time === currentTime;
 
-  if (!open) {
-    return (
-      <Button variant="outline" size="sm" type="button" onClick={() => setOpen(true)}>
-        Reschedule
-      </Button>
-    );
-  }
+  const toggle = () => setOpen((value) => !value);
+
+  // The trigger stays in the row's action bar; the panel is a full-width flex
+  // item that wraps beneath it (order-last), so the bar never collapses.
+  const trigger = (
+    <Button variant="outline" size="sm" type="button" onClick={toggle}>
+      {open ? "Close" : "Reschedule"}
+    </Button>
+  );
+
+  if (!open) return trigger;
 
   if (state?.message) {
     return (
-      <div className="rounded-lg border border-teal-200 bg-teal-50 p-3 text-sm text-teal-900">
-        Moved. {state.message}
-      </div>
+      <>
+        {trigger}
+        <div
+          role="status"
+          className="order-last flex w-full items-start gap-2.5 rounded-xl border border-teal-200 bg-teal-50 p-3.5 text-sm text-teal-900"
+        >
+          <CheckIcon className="mt-0.5 h-4 w-4 shrink-0 text-teal-700" />
+          <div>
+            <p className="font-medium">Your appointment has moved</p>
+            <p className="text-teal-800">{state.message.replace(/^Rescheduled to /, "")}</p>
+            <p className="mt-1 text-xs text-teal-700">
+              Your existing payment carries over — nothing extra to pay.
+            </p>
+          </div>
+        </div>
+      </>
     );
   }
 
   return (
-    <form action={formAction} className="w-full space-y-3 rounded-lg border border-slate-200 p-3">
-      <input type="hidden" name="appointmentId" value={appointmentId} />
-      {day && <input type="hidden" name="date" value={day.date} />}
-      {selected && <input type="hidden" name="time" value={selected} />}
+    <>
+      {trigger}
+      <form
+        action={formAction}
+        className="order-last w-full space-y-4 rounded-xl border border-cream-200 bg-cream-50/70 p-4"
+      >
+        <input type="hidden" name="appointmentId" value={appointmentId} />
+        {day && <input type="hidden" name="date" value={day.date} />}
+        {selected && <input type="hidden" name="time" value={selected} />}
 
-      <div className="flex items-center justify-between gap-2">
-        <p className="text-xs font-medium text-slate-700">
-          Move from {currentLabel}
-        </p>
-        <button
-          type="button"
-          onClick={() => setOpen(false)}
-          className="text-xs text-slate-500 hover:text-slate-700"
-        >
-          Never mind
-        </button>
-      </div>
+        <div>
+          <p className="text-sm font-semibold text-ink-900">Move this appointment</p>
+          <p className="text-xs text-ink-500">
+            Currently {currentLabel} · choose a new day and time below
+          </p>
+        </div>
 
-      <div className="flex flex-wrap gap-2">
+      <div className="-mx-1 flex snap-x gap-2 overflow-x-auto px-1 pb-1" role="tablist" aria-label="Choose a day">
         {days.map((option, index) => (
           <button
             key={option.date}
             type="button"
+            role="tab"
+            aria-selected={index === dayIndex}
+            aria-label={`${option.isToday ? "Today" : option.label} — ${selectableTimes(option).length} free slots`}
             onClick={() => {
               setDayIndex(index);
               setSelected(null);
             }}
             className={cn(
-              "rounded-lg border px-2.5 py-1 text-xs font-medium transition",
+              "shrink-0 snap-start rounded-xl border px-3 py-2 text-xs font-medium transition-colors",
               index === dayIndex
-                ? "border-teal-600 bg-teal-600 text-white"
-                : "border-slate-300 bg-white text-slate-700 hover:bg-slate-50",
+                ? "border-teal-700 bg-teal-700 text-white shadow-sm"
+                : "border-cream-300 bg-white text-ink-700 hover:border-teal-300 hover:bg-teal-50/50",
+              selectableTimes(option).length === 0 && index !== dayIndex && "text-ink-500/70",
             )}
           >
             {option.isToday ? "Today" : option.label}
-            {option.times.length === 0 && <span className="ml-1 opacity-70">(full)</span>}
+            <span
+              className={cn(
+                "ml-1.5 rounded-full px-1.5 py-0.5 text-[10px]",
+                index === dayIndex ? "bg-white/20" : "bg-cream-100 text-ink-500",
+              )}
+            >
+              {selectableTimes(option).length === 0 ? "full" : `${selectableTimes(option).length} free`}
+            </span>
           </button>
         ))}
       </div>
 
       {day && day.times.length > 0 ? (
-        <div className="grid grid-cols-3 gap-2 sm:grid-cols-4">
-          {day.times.map((time) => (
-            <button
-              key={time}
-              type="button"
-              onClick={() => setSelected(time)}
-              className={cn(
-                "rounded-lg border px-2 py-1.5 text-xs font-medium transition",
-                selected === time
-                  ? "border-teal-600 bg-teal-600 text-white"
-                  : "border-slate-300 bg-white text-slate-700 hover:border-teal-400 hover:bg-teal-50",
-              )}
-            >
-              {formatTime(time)}
-            </button>
-          ))}
+        <div className="grid grid-cols-3 gap-2 sm:grid-cols-5">
+          {day.times.map((time) => {
+            const isSelected = selected === time;
+            const isCurrent = isCurrentSlot(day.date, time);
+            return (
+              <button
+                key={time}
+                type="button"
+                aria-pressed={isSelected}
+                disabled={isCurrent}
+                aria-label={isCurrent ? `${formatTime(time)} — your current slot` : formatTime(time)}
+                title={isCurrent ? "Your current slot" : undefined}
+                onClick={() => setSelected(time)}
+                className={cn(
+                  "flex h-11 items-center justify-center gap-1 rounded-xl border text-xs font-medium transition-colors",
+                  isCurrent
+                    ? "cursor-not-allowed flex-col gap-0.5 border-dashed border-cream-300 bg-cream-100 leading-none text-ink-500"
+                    : isSelected
+                      ? "border-teal-700 bg-teal-700 text-white shadow-sm"
+                      : "border-cream-300 bg-white text-ink-800 hover:border-teal-400 hover:bg-teal-50/60",
+                )}
+              >
+                {isSelected && <CheckIcon className="h-3.5 w-3.5" />}
+                {formatTime(time)}
+                {isCurrent && <span className="text-[9px] uppercase tracking-wide">current</span>}
+              </button>
+            );
+          })}
         </div>
       ) : (
-        <p className="rounded-lg bg-slate-50 p-3 text-xs text-slate-600">
+        <p className="rounded-xl border border-cream-200 bg-white p-3.5 text-xs text-ink-500">
           No free slots on this day. Try another day.
         </p>
       )}
 
-      {state?.error && (
-        <p className="rounded-lg bg-rose-50 p-2 text-xs text-rose-700">{state.error}</p>
+      {day && day.times.length > 0 && selectableTimes(day).length === 0 && (
+        <p className="rounded-xl border border-cream-200 bg-white p-3.5 text-xs text-ink-500">
+          {formatTime(currentTime)} on this day is already yours — pick another day to move.
+        </p>
       )}
 
-      <Button type="submit" size="sm" className="w-full" disabled={pending || !selected}>
-        {pending
-          ? "Moving…"
-          : selected
-            ? `Move to ${formatDate(day!.date)} ${formatTime(selected)}`
-            : "Pick a new slot"}
-      </Button>
-    </form>
+      {selected && day && (
+        <p className="rounded-xl bg-white px-3.5 py-2.5 text-xs text-ink-600 ring-1 ring-inset ring-cream-200">
+          Moving from <span className="font-medium text-ink-800">{currentLabel}</span> to{" "}
+          <span className="font-medium text-teal-800">
+            {formatDate(day.date)} · {formatTime(selected)}
+          </span>
+        </p>
+      )}
+
+      {state?.error && (
+        <p
+          role="alert"
+          className="flex items-start gap-2 rounded-xl border border-rose-200 bg-rose-50 p-3 text-xs text-rose-700"
+        >
+          <AlertIcon className="mt-px h-3.5 w-3.5 shrink-0" />
+          {state.error}
+        </p>
+      )}
+
+      {selected && day ? (
+        <Button type="submit" size="default" className="w-full" disabled={pending}>
+          {pending ? "Moving your appointment…" : "Confirm new slot"}
+        </Button>
+      ) : (
+        <p className="text-center text-xs text-ink-500">Pick a free slot above to confirm.</p>
+      )}
+      </form>
+    </>
   );
 }

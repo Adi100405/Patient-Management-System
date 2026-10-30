@@ -9,7 +9,7 @@ export default function SignUpPage() {
       <Card>
         <CardHeader>
           <CardTitle className="text-xl">Create your account</CardTitle>
-          <p className="text-sm text-slate-500">
+          <p className="text-sm text-ink-500">
             Book appointments as a patient, or start seeing patients as a doctor.
           </p>
         </CardHeader>
