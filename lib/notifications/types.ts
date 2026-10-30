@@ -5,6 +5,12 @@
  * SMS/WhatsApp").
  */
 
+/** The transport a message travels on. Kept separate from the provider name. */
+export type NotificationChannelName = "email" | "sms";
+
+/** Lifecycle of a ledger row. */
+export type NotificationStatus = "queued" | "sent" | "failed";
+
 export type NotificationMessage = {
   to: string;
   subject: string;
@@ -14,7 +20,16 @@ export type NotificationMessage = {
   meta?: Record<string, string>;
 };
 
+/**
+ * What a channel reports back after a successful send. `providerRef` is the
+ * provider's own identifier (a Resend message id, an SMS sid) and is stored on
+ * the ledger row so a delivery can be looked up in the provider's dashboard.
+ */
+export type NotificationSendResult = {
+  providerRef?: string | null;
+};
+
 export type NotificationChannel = {
   readonly name: string;
-  send(message: NotificationMessage): Promise<void>;
+  send(message: NotificationMessage): Promise<NotificationSendResult | void>;
 };

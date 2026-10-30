@@ -28,7 +28,10 @@ export async function sendBookingConfirmation(
   const ctx = await contextFor(appointmentId);
   if (!ctx) return;
   const content = bookingConfirmed(ctx, options);
-  await notify({ to: ctx.patientEmail, ...content, meta: { kind: "booking_confirmed" } });
+  await notify(
+    { to: ctx.patientEmail, ...content, meta: { kind: "booking_confirmed" } },
+    { idempotencyKey: `booking_confirmed:${appointmentId}` },
+  );
 }
 
 /** Called after the appointment row already carries the new slot, so the
@@ -40,14 +43,24 @@ export async function sendRescheduleNotice(
   const ctx = await contextFor(appointmentId);
   if (!ctx) return;
   const content = appointmentRescheduled(ctx, options);
-  await notify({ to: ctx.patientEmail, ...content, meta: { kind: "appointment_rescheduled" } });
+  await notify(
+    { to: ctx.patientEmail, ...content, meta: { kind: "appointment_rescheduled" } },
+    {
+      // Moving the same visit to the same slot twice is the same message; the
+      // old slot in the key keeps A→B→A distinct from a repeated A→B.
+      idempotencyKey: `appointment_rescheduled:${appointmentId}:${options.previousDate}T${options.previousTime}->${ctx.date}T${ctx.time}`,
+    },
+  );
 }
 
 export async function sendPaymentConfirmation(appointmentId: number) {
   const ctx = await contextFor(appointmentId);
   if (!ctx) return;
   const content = paymentConfirmed(ctx);
-  await notify({ to: ctx.patientEmail, ...content, meta: { kind: "payment_confirmed" } });
+  await notify(
+    { to: ctx.patientEmail, ...content, meta: { kind: "payment_confirmed" } },
+    { idempotencyKey: `payment_confirmed:${appointmentId}` },
+  );
 }
 
 /**
@@ -87,7 +100,10 @@ export async function sendCancellationNotice(
   const ctx = await contextFor(appointmentId);
   if (!ctx) return;
   const content = appointmentCancelled(ctx, options);
-  await notify({ to: ctx.patientEmail, ...content, meta: { kind: "appointment_cancelled" } });
+  await notify(
+    { to: ctx.patientEmail, ...content, meta: { kind: "appointment_cancelled" } },
+    { idempotencyKey: `appointment_cancelled:${appointmentId}` },
+  );
 }
 
 export async function sendRefundUpdate(
@@ -102,7 +118,10 @@ export async function sendRefundUpdate(
   const ctx = await contextFor(appointmentId);
   if (!ctx) return;
   const content = refundUpdate(ctx, options);
-  await notify({ to: ctx.patientEmail, ...content, meta: { kind: `refund_${options.stage}` } });
+  await notify(
+    { to: ctx.patientEmail, ...content, meta: { kind: `refund_${options.stage}` } },
+    { idempotencyKey: `refund_${options.stage}:${appointmentId}` },
+  );
 }
 
 export async function sendAppointmentReminder(
@@ -113,10 +132,13 @@ export async function sendAppointmentReminder(
   const ctx = await contextFor(appointmentId);
   if (!ctx) return null;
   const content = reminder(ctx, { kind });
-  const delivered = await notify({
+  const result = await notify({
     to: ctx.patientEmail,
     ...content,
     meta: { kind: `reminder_${kind}` },
+    // Deliberately no idempotency key: the `reminders` table already claims
+    // each appointment+kind once, and it must stay possible to re-send after a
+    // failed delivery (the notification ledger row is kept for audit only).
   });
-  return delivered ? ctx.patientEmail : null;
+  return result.delivered ? ctx.patientEmail : null;
 }
