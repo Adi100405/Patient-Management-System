@@ -7,7 +7,11 @@ import {
   paymentConfirmed,
   refundUpdate,
   reminder,
+  type AppointmentMailContext,
+  type MailContent,
 } from "./templates";
+import { channelsFor, preferencesForUser } from "./preferences";
+import type { NotifyResult } from "./index";
 import type { RefundOutcome } from "@/lib/refunds/service";
 
 /**
@@ -15,10 +19,58 @@ import type { RefundOutcome } from "@/lib/refunds/service";
  * inside a transactional flow: a missing appointment, a missing email address
  * or a dead provider all end as a logged no-op, never as a thrown error. A
  * booking must not fail because email is down.
+ *
+ * Each event renders once into an email and (where a template has one) an SMS,
+ * then delivers both through the patient's own channel choices — so a patient
+ * who has not consented to SMS never receives one, and one who has disabled
+ * email is not emailed behind their back.
  */
 
 async function contextFor(appointmentId: number) {
   return appointmentMailContext(appointmentId);
+}
+
+type DeliveryReport = { email: NotifyResult | null; sms: NotifyResult | null };
+
+async function deliver(
+  ctx: AppointmentMailContext,
+  content: MailContent,
+  options: { kind: string; idempotencyKey?: string | null },
+): Promise<DeliveryReport> {
+  const prefs = await preferencesForUser(ctx.patientUserId);
+  const plan = channelsFor(prefs, { phone: ctx.patientPhone });
+
+  // Per-channel idempotency keys: one ledger row per channel, so a duplicate
+  // event can never double-send on either transport.
+  const emailKey = options.idempotencyKey ? `${options.idempotencyKey}:email` : null;
+  const smsKey = options.idempotencyKey ? `${options.idempotencyKey}:sms` : null;
+
+  const [email, sms] = await Promise.all([
+    plan.email
+      ? notify(
+          {
+            to: ctx.patientEmail,
+            subject: content.subject,
+            text: content.text,
+            meta: { kind: options.kind },
+          },
+          { channel: "email", idempotencyKey: emailKey },
+        )
+      : Promise.resolve(null),
+    plan.sms && content.sms
+      ? notify(
+          {
+            to: ctx.patientPhone ?? "",
+            subject: "",
+            text: content.sms,
+            meta: { kind: options.kind },
+          },
+          { channel: "sms", idempotencyKey: smsKey },
+        )
+      : Promise.resolve(null),
+  ]);
+
+  return { email, sms };
 }
 
 export async function sendBookingConfirmation(
@@ -28,10 +80,10 @@ export async function sendBookingConfirmation(
   const ctx = await contextFor(appointmentId);
   if (!ctx) return;
   const content = bookingConfirmed(ctx, options);
-  await notify(
-    { to: ctx.patientEmail, ...content, meta: { kind: "booking_confirmed" } },
-    { idempotencyKey: `booking_confirmed:${appointmentId}` },
-  );
+  await deliver(ctx, content, {
+    kind: "booking_confirmed",
+    idempotencyKey: `booking_confirmed:${appointmentId}`,
+  });
 }
 
 /** Called after the appointment row already carries the new slot, so the
@@ -43,24 +95,22 @@ export async function sendRescheduleNotice(
   const ctx = await contextFor(appointmentId);
   if (!ctx) return;
   const content = appointmentRescheduled(ctx, options);
-  await notify(
-    { to: ctx.patientEmail, ...content, meta: { kind: "appointment_rescheduled" } },
-    {
-      // Moving the same visit to the same slot twice is the same message; the
-      // old slot in the key keeps A→B→A distinct from a repeated A→B.
-      idempotencyKey: `appointment_rescheduled:${appointmentId}:${options.previousDate}T${options.previousTime}->${ctx.date}T${ctx.time}`,
-    },
-  );
+  await deliver(ctx, content, {
+    kind: "appointment_rescheduled",
+    // Moving the same visit to the same slot twice is the same message; the
+    // old slot in the key keeps A→B→A distinct from a repeated A→B.
+    idempotencyKey: `appointment_rescheduled:${appointmentId}:${options.previousDate}T${options.previousTime}->${ctx.date}T${ctx.time}`,
+  });
 }
 
 export async function sendPaymentConfirmation(appointmentId: number) {
   const ctx = await contextFor(appointmentId);
   if (!ctx) return;
   const content = paymentConfirmed(ctx);
-  await notify(
-    { to: ctx.patientEmail, ...content, meta: { kind: "payment_confirmed" } },
-    { idempotencyKey: `payment_confirmed:${appointmentId}` },
-  );
+  await deliver(ctx, content, {
+    kind: "payment_confirmed",
+    idempotencyKey: `payment_confirmed:${appointmentId}`,
+  });
 }
 
 /**
@@ -100,10 +150,10 @@ export async function sendCancellationNotice(
   const ctx = await contextFor(appointmentId);
   if (!ctx) return;
   const content = appointmentCancelled(ctx, options);
-  await notify(
-    { to: ctx.patientEmail, ...content, meta: { kind: "appointment_cancelled" } },
-    { idempotencyKey: `appointment_cancelled:${appointmentId}` },
-  );
+  await deliver(ctx, content, {
+    kind: "appointment_cancelled",
+    idempotencyKey: `appointment_cancelled:${appointmentId}`,
+  });
 }
 
 export async function sendRefundUpdate(
@@ -118,10 +168,10 @@ export async function sendRefundUpdate(
   const ctx = await contextFor(appointmentId);
   if (!ctx) return;
   const content = refundUpdate(ctx, options);
-  await notify(
-    { to: ctx.patientEmail, ...content, meta: { kind: `refund_${options.stage}` } },
-    { idempotencyKey: `refund_${options.stage}:${appointmentId}` },
-  );
+  await deliver(ctx, content, {
+    kind: `refund_${options.stage}`,
+    idempotencyKey: `refund_${options.stage}:${appointmentId}`,
+  });
 }
 
 export async function sendAppointmentReminder(
@@ -132,13 +182,11 @@ export async function sendAppointmentReminder(
   const ctx = await contextFor(appointmentId);
   if (!ctx) return null;
   const content = reminder(ctx, { kind });
-  const result = await notify({
-    to: ctx.patientEmail,
-    ...content,
-    meta: { kind: `reminder_${kind}` },
+  const report = await deliver(ctx, content, {
+    kind: `reminder_${kind}`,
     // Deliberately no idempotency key: the `reminders` table already claims
     // each appointment+kind once, and it must stay possible to re-send after a
     // failed delivery (the notification ledger row is kept for audit only).
   });
-  return result.delivered ? ctx.patientEmail : null;
+  return report.email?.delivered ? ctx.patientEmail : null;
 }

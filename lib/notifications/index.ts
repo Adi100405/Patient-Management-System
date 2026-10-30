@@ -1,5 +1,6 @@
 import { logChannel } from "./channels/log";
 import { createResendChannel } from "./channels/resend";
+import { createTwilioChannel } from "./channels/twilio";
 import { dispatchNotification, retryDueNotifications } from "./dispatch";
 import { dbNotificationStore, type NotificationStore } from "./store";
 import type {
@@ -19,20 +20,24 @@ export type {
 export type { NotificationRecord, NotificationStore } from "./store";
 
 /**
- * The transport email goes out on. Resend when configured, the log channel
- * otherwise — so the pipeline is always live, and a deployment without keys
- * degrades to printing emails instead of failing bookings.
+ * The transport for a channel name, or null when that channel has no provider
+ * configured. Email degrades to the log channel so the pipeline is always live;
+ * SMS degrades to a clean skip, because a silently "logged" SMS could be read
+ * as a delivery.
  */
 export function getNotificationChannel(): NotificationChannel {
   return createResendChannel() ?? logChannel;
 }
 
-/**
- * Resolves the transport for a channel name. SMS has no transport yet; when
- * one lands it plugs in here without touching any caller.
- */
 function channelFor(name: NotificationChannelName): NotificationChannel | null {
-  return name === "email" ? getNotificationChannel() : null;
+  switch (name) {
+    case "email":
+      return getNotificationChannel();
+    case "sms":
+      return createTwilioChannel();
+    default:
+      return null;
+  }
 }
 
 export type NotifyResult = {
