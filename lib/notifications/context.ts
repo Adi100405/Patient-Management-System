@@ -15,11 +15,13 @@ export async function appointmentMailContext(
   const [row] = await db
     .select({
       appointmentId: appointments.id,
+      patientUserId: users.id,
       date: appointments.appointmentDate,
       time: appointments.appointmentTime,
       reason: appointments.reason,
       patientName: patients.fullName,
       patientEmail: users.email,
+      patientPhone: patients.phone,
       doctorName: doctors.fullName,
       specialization: doctors.specialization,
       fee: doctors.consultationFee,
@@ -37,6 +39,8 @@ export async function appointmentMailContext(
     appointmentId: row.appointmentId,
     patientName: row.patientName,
     patientEmail: row.patientEmail,
+    patientPhone: row.patientPhone,
+    patientUserId: row.patientUserId,
     doctorName: row.doctorName,
     specialization: row.specialization,
     date: row.date,

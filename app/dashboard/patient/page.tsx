@@ -2,15 +2,17 @@ import Link from "next/link";
 import { and, asc, eq, gte, inArray, lte } from "drizzle-orm";
 import { cancelAppointment } from "@/actions/booking";
 import { getDb } from "@/db";
-import { appointments, availability, doctors, payments } from "@/db/schema";
+import { appointments, availability, doctors, patients, payments, users } from "@/db/schema";
 import type { AppointmentStatus } from "@/db/schema";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { PaymentCheckout } from "@/components/payment-checkout";
+import { NotificationPreferences } from "@/components/notification-preferences";
 import { RefundStatusLine } from "@/components/refund-status";
 import { RescheduleAppointment, type RescheduleDayOption } from "@/components/reschedule-appointment";
 import { refundsForPatient } from "@/lib/refunds/queries";
+import { preferencesForUser } from "@/lib/notifications/preferences";
 import { sweepReminders } from "@/lib/notifications/reminders";
 import { requireRole } from "@/lib/session";
 import { availableSlots, clinicNow, upcomingDays } from "@/lib/slots";
@@ -67,6 +69,19 @@ export default async function PatientDashboard() {
     .orderBy(asc(appointments.appointmentDate), asc(appointments.appointmentTime));
 
   const refundsByPayment = await refundsForPatient(session.profileId);
+
+  // Contact details + channel choices for the preferences card. A missing
+  // profile row cannot happen for a signed-in session, but the card would
+  // render with defaults rather than take the page down.
+  const [profile] = await db
+    .select({ userId: users.id, phone: patients.phone })
+    .from(patients)
+    .innerJoin(users, eq(users.id, patients.userId))
+    .where(eq(patients.id, session.profileId))
+    .limit(1);
+  const preferences = profile
+    ? await preferencesForUser(profile.userId)
+    : await Promise.resolve(null);
 
   const today = clinicNow().date;
   const upcoming = rows.filter((r) => r.status === "booked" && r.date >= today);
@@ -320,6 +335,18 @@ export default async function PatientDashboard() {
           )}
         </CardContent>
       </Card>
+
+      {profile && preferences && (
+        <NotificationPreferences
+          initial={{
+            emailEnabled: preferences.emailEnabled,
+            smsEnabled: preferences.smsEnabled,
+            smsConsented: preferences.smsConsentAt !== null,
+            marketingOptIn: preferences.marketingOptIn,
+            phone: profile.phone ?? "",
+          }}
+        />
+      )}
     </div>
   );
 }

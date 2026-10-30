@@ -10,6 +10,8 @@ export type AppointmentMailContext = {
   appointmentId: number;
   patientName: string;
   patientEmail: string;
+  patientPhone: string | null;
+  patientUserId: number;
   doctorName: string;
   specialization: string;
   /** Clinic wall-clock date and time of the visit. */
@@ -20,7 +22,13 @@ export type AppointmentMailContext = {
   currency: string;
 };
 
-export type MailContent = { subject: string; text: string };
+/**
+ * One message, two renderings. `sms` is optional because some templates only
+ * make sense with room to breathe — but when present it must stay short, and
+ * neither rendering may quote the patient's free-text reason, which is medical
+ * content and does not belong in an inbox or a phone's message list.
+ */
+export type MailContent = { subject: string; text: string; sms?: string };
 
 function greeting(ctx: AppointmentMailContext) {
   return `Hi ${ctx.patientName},`;
@@ -42,6 +50,7 @@ export function bookingConfirmed(
 
   return {
     subject: `Appointment booked — ${formatDate(ctx.date)} at ${formatTime(ctx.time)}`,
+    sms: `Medrella: appointment booked — ${formatDate(ctx.date)} at ${formatTime(ctx.time)}, Dr. ${ctx.doctorName}. Details: your Medrella dashboard.`,
     text: [
       greeting(ctx),
       "Your appointment is booked.",
@@ -57,6 +66,7 @@ export function bookingConfirmed(
 export function paymentConfirmed(ctx: AppointmentMailContext): MailContent {
   return {
     subject: `Payment received — appointment confirmed`,
+    sms: `Medrella: payment of ${formatCurrency(ctx.fee)} received. Your appointment on ${formatDate(ctx.date)} at ${formatTime(ctx.time)} is confirmed.`,
     text: [
       greeting(ctx),
       `We have received your consultation fee of ${formatCurrency(ctx.fee)}. Your appointment is confirmed.`,
@@ -85,6 +95,10 @@ export function appointmentCancelled(
 
   return {
     subject,
+    sms:
+      options.cancelledBy === "clinic"
+        ? `Medrella: your appointment with Dr. ${ctx.doctorName} on ${formatDate(ctx.date)} was cancelled by the clinic. We apologise for the inconvenience.`
+        : `Medrella: your appointment with Dr. ${ctx.doctorName} on ${formatDate(ctx.date)} has been cancelled.`,
     text: [
       greeting(ctx),
       options.cancelledBy === "clinic"
@@ -106,13 +120,13 @@ export function appointmentRescheduled(
 ): MailContent {
   return {
     subject: `Appointment rescheduled — ${formatDate(ctx.date)} at ${formatTime(ctx.time)}`,
+    sms: `Medrella: your appointment is moved to ${formatDate(ctx.date)} at ${formatTime(ctx.time)}, Dr. ${ctx.doctorName}. Previous time: ${formatDate(options.previousDate)} ${formatTime(options.previousTime)}.`,
     text: [
       greeting(ctx),
       "Your appointment has been moved to a new time.",
       "",
       `New time: ${visitLine(ctx)}`,
       `Previous time: ${formatDate(options.previousDate)} at ${formatTime(options.previousTime)}`,
-      ctx.reason ? `Reason: ${ctx.reason}` : "",
       "",
       "Any payment you have already made carries over — no extra charge.",
       "You can view or cancel it from your dashboard.",
@@ -128,6 +142,7 @@ export function reminder(
 ): MailContent {
   return {
     subject: `Reminder — appointment with Dr. ${ctx.doctorName} ${options.kind === "24h" ? "tomorrow" : "in an hour"}`,
+    sms: `Medrella: reminder — appointment with Dr. ${ctx.doctorName} ${options.kind === "24h" ? "tomorrow" : "in about an hour"} at ${formatTime(ctx.time)}.`,
     text: [
       greeting(ctx),
       options.kind === "24h"
@@ -135,7 +150,6 @@ export function reminder(
         : "This is a reminder that your appointment starts in about an hour.",
       "",
       visitLine(ctx),
-      ctx.reason ? `Reason: ${ctx.reason}` : "",
       "",
       "Need to change it? Cancel from your dashboard — refunds follow the clinic policy.",
     ]
@@ -171,6 +185,11 @@ export function refundUpdate(
 
   return {
     subject: `Refund ${options.stage === "completed" ? "completed" : options.stage === "failed" ? "failed" : "initiated"} — ${amount}`,
+    sms: {
+      initiated: `Medrella: refund of ${amount} initiated for your cancelled appointment. It usually settles in 3–5 working days.`,
+      completed: `Medrella: your refund of ${amount} is complete. It reaches your original payment method in 3–5 working days.`,
+      failed: `Medrella: your refund of ${amount} could not be processed right now. We will retry it.`,
+    }[options.stage],
     text: [greeting(ctx), ...body, "", visitLine(ctx)].join("\n") + signOff,
   };
 }

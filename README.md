@@ -11,8 +11,9 @@ appear in their dashboard instantly.
 - **Doctor availability management** — doctors add or remove their own weekly windows from the dashboard; new doctors are seeded with a default Mon–Fri 09:00–13:00 schedule so they are bookable immediately; windows with upcoming bookings cannot be removed
 - **Live slot availability** — slots are generated from each doctor's availability windows (15/30/45/60-minute intervals), booked slots and past times are removed automatically; all comparisons use clinic time (Asia/Kolkata) so "today" is correct regardless of server time zone
 - **Booking flow** — slot selection → optional reason → confirmation; bookings are re-validated server-side and backed by a partial unique index, so the same slot can never be double-booked
-- **Patient dashboard** — upcoming appointments, booking history, one-click cancel
+- **Patient dashboard** — upcoming appointments, booking history, one-click cancel, notification preferences (email/SMS with consent)
 - **Doctor dashboard** — schedule of booked patients with contact details, daily counts, cancel support
+- **Notifications** — email (Resend) and SMS (Twilio) with a durable audit ledger, idempotent sends, exponential-backoff retries, 24h/1h appointment reminders, and per-patient consent-aware channel preferences. See [`docs/notifications.md`](docs/notifications.md)
 - **Seeded demo data** — 6 doctors across cardiology, dermatology, orthopedics, pediatrics, general medicine and neurology
 
 ## Tech stack
@@ -26,6 +27,8 @@ appear in their dashboard instantly.
 | ORM | Drizzle ORM |
 | Validation | Zod |
 | Auth | JWT (jose) + bcrypt |
+| Notifications | Resend (email) + Twilio (SMS) |
+| Testing | Vitest |
 | Hosting | Vercel + Neon |
 
 ## Data model
@@ -61,6 +64,7 @@ Open http://localhost:3000.
 | `npm run build` | Production build |
 | `npm run lint` | ESLint |
 | `npm run typecheck` | TypeScript check |
+| `npm test` | Run the unit tests (Vitest) |
 | `npm run db:push` | Push the Drizzle schema to the database |
 | `npm run db:seed` | Reset and seed demo data |
 | `npm run db:studio` | Open Drizzle Studio |
@@ -69,7 +73,9 @@ Open http://localhost:3000.
 
 1. Create a PostgreSQL database on [Neon](https://neon.tech) and copy the connection string
 2. Import the repo on [Vercel](https://vercel.com)
-3. Add environment variables: `DATABASE_URL`, `SESSION_SECRET`
+3. Add environment variables: `DATABASE_URL`, `SESSION_SECRET`, plus
+   `CRON_SECRET` and — for real notifications — `RESEND_API_KEY` / `RESEND_FROM`
+   and the `TWILIO_*` trio (see [`docs/notifications.md`](docs/notifications.md))
 4. Deploy, then run `npm run db:push` and `npm run db:seed` locally against the same database
 
 ## Day 1 (kept for reference)

@@ -273,3 +273,26 @@ export const notifications = pgTable("notifications", {
 export type Notification = typeof notifications.$inferSelect;
 export type NotificationChannelName = Notification["channel"];
 export type NotificationStatus = Notification["status"];
+
+/**
+ * Per-patient communication choices. Operational messages (bookings,
+ * cancellations, reminders, payment and refund updates) respect the channel
+ * toggles; anything promotional is additionally gated behind an explicit
+ * opt-in, which this app does not send yet — the column exists so marketing
+ * mail, if it ever comes, cannot start without consent.
+ *
+ * SMS needs its own recorded consent: a phone number alone is not permission.
+ */
+export const notificationPreferences = pgTable("notification_preferences", {
+  userId: integer("user_id")
+    .primaryKey()
+    .references(() => users.id, { onDelete: "cascade" }),
+  emailEnabled: boolean("email_enabled").notNull().default(true),
+  smsEnabled: boolean("sms_enabled").notNull().default(false),
+  /** When the patient ticked the SMS consent box; null means never consented. */
+  smsConsentAt: timestamp("sms_consent_at", { withTimezone: true }),
+  marketingOptIn: boolean("marketing_opt_in").notNull().default(false),
+  updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
+});
+
+export type NotificationPreferences = typeof notificationPreferences.$inferSelect;
