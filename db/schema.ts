@@ -223,3 +223,53 @@ export const reminders = pgTable("reminders", {
 
 export type Reminder = typeof reminders.$inferSelect;
 export type ReminderKind = Reminder["kind"];
+
+export const notificationChannelEnum = pgEnum("notification_channel", ["email", "sms"]);
+export const notificationStatusEnum = pgEnum("notification_status", [
+  "queued",
+  "sent",
+  "failed",
+]);
+
+/**
+ * Durable audit ledger for every notification the app tries to send.
+ *
+ * One row is written before the provider is called, so a send that never
+ * returns still leaves evidence behind. `idempotencyKey` is what makes a
+ * duplicate event (a webhook delivered twice, a double-clicked button, a
+ * retried server action) harmless: the unique constraint claims the message
+ * once, and every later attempt finds the existing row instead of sending
+ * again. Rows that fail are retried by the sweep in `lib/notifications/retry.ts`
+ * with exponential backoff, up to `MAX_ATTEMPTS`.
+ */
+export const notifications = pgTable("notifications", {
+  id: serial("id").primaryKey(),
+  /** Machine-readable message type, e.g. `booking_confirmed`, `reminder_24h`. */
+  kind: text("kind").notNull(),
+  channel: notificationChannelEnum("channel").notNull(),
+  recipient: text("recipient").notNull(),
+  subject: text("subject"),
+  body: text("body").notNull(),
+  status: notificationStatusEnum("status").notNull().default("queued"),
+  /** Number of delivery attempts made so far. */
+  attempts: integer("attempts").notNull().default(0),
+  lastError: text("last_error"),
+  /** Provider-side identifier (Resend message id, SMS message sid). */
+  providerRef: text("provider_ref"),
+  /** Stable key for "this exact message"; null when no dedup is wanted. */
+  idempotencyKey: text("idempotency_key"),
+  /** Earliest time a failed row may be retried. */
+  nextAttemptAt: timestamp("next_attempt_at", { withTimezone: true }),
+  createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+  updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
+  sentAt: timestamp("sent_at", { withTimezone: true }),
+}, (table) => [
+  // Postgres treats nulls as distinct here, so un-keyed messages never collide.
+  uniqueIndex("notifications_idempotency_key_unique").on(table.idempotencyKey),
+  index("notifications_retry_idx").on(table.status, table.nextAttemptAt),
+  index("notifications_kind_idx").on(table.kind, table.createdAt),
+]);
+
+export type Notification = typeof notifications.$inferSelect;
+export type NotificationChannelName = Notification["channel"];
+export type NotificationStatus = Notification["status"];

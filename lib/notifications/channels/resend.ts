@@ -45,6 +45,11 @@ export function createResendChannel(): NotificationChannel | null {
         const body = await response.text().catch(() => "");
         throw new Error(`Resend rejected the email (${response.status}): ${body.slice(0, 200)}`);
       }
+
+      // Resend returns the queued message id; storing it makes a delivery
+      // traceable in the provider dashboard from our own ledger row.
+      const payload = (await response.json().catch(() => null)) as { id?: string } | null;
+      return { providerRef: payload?.id ?? null };
     },
   };
 }
