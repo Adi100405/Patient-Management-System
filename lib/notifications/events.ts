@@ -52,6 +52,7 @@ async function deliver(
             to: ctx.patientEmail,
             subject: content.subject,
             text: content.text,
+            html: content.html,
             meta: { kind: options.kind },
           },
           { channel: "email", idempotencyKey: emailKey },

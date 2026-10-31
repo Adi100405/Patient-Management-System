@@ -44,6 +44,7 @@ async function sendRecord(
       to: record.recipient,
       subject: record.subject ?? "",
       text: record.body,
+      html: record.htmlBody,
       meta: { kind: record.kind },
     });
 
@@ -85,6 +86,7 @@ export async function dispatchNotification(
       // SMS has no subject line; the ledger keeps that honest with a null.
       subject: meta.channel === "email" ? message.subject : null,
       body: message.text,
+      htmlBody: meta.channel === "email" ? (message.html ?? null) : null,
       idempotencyKey: meta.idempotencyKey ?? null,
     },
     now,

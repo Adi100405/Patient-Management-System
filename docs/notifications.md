@@ -29,7 +29,9 @@ Key files:
 
 | File | Responsibility |
 |---|---|
-| `lib/notifications/templates.ts` | Pure message text. One reviewable place for every patient-facing sentence. |
+| `lib/notifications/templates.ts` | Pure message text and markup. One reviewable place for every patient-facing sentence. |
+| `lib/notifications/email-layout.ts` | The shared HTML shell every email is rendered into. |
+| `lib/notifications/links.ts` | Absolute dashboard / receipt URLs for email buttons. |
 | `lib/notifications/context.ts` | One query that resolves everything a template needs. |
 | `lib/notifications/events.ts` | Event entry points (`sendBookingConfirmation`, …). Safe to call from any transactional flow — they never throw. |
 | `lib/notifications/preferences.ts` | Loads a patient's channel choices; pure gate `channelsFor()`. |
@@ -79,6 +81,28 @@ Setup:
 Both transports use plain `fetch` with an 8-second timeout, so a hung provider
 can never hold up a booking, payment or refund.
 
+## Email rendering
+
+Every email is delivered as `text` **and** `html`. Both come from the same
+template in `templates.ts`, so the sentences are identical and only the
+presentation differs — a client that cannot render HTML still gets the whole
+message.
+
+- The shell lives in `lib/notifications/email-layout.ts`:
+  `renderEmail({ heading, intro, rows, cta, footnote })`. Templates supply
+  content, never markup.
+- Client-safe by construction: table layout, inline styles only, a 600px
+  measure, no flex/grid, and no external images or web fonts — the wordmark is
+  text, so clients that block images still show the brand.
+- Every interpolated value is HTML-escaped, so a name or note can never inject
+  markup.
+- Buttons point at absolute URLs built in `lib/notifications/links.ts`, resolved
+  from `APP_URL` → `VERCEL_URL` → `http://localhost:3000`. A payment
+  confirmation links straight to its receipt; every other event links to the
+  dashboard.
+- The HTML body is stored on the ledger row (`html_body`), so the retry sweep
+  re-sends the rich email instead of silently downgrading it to plain text.
+
 ## Events
 
 | Event | When it fires | Idempotency key |
@@ -113,7 +137,7 @@ opens their dashboard.
 
 Every send writes a `notifications` row **before** the provider is called:
 
-- `kind`, `channel`, `recipient`, `subject`, `body` — what was attempted
+- `kind`, `channel`, `recipient`, `subject`, `body`, `htmlBody` — what was attempted
 - `status` — `queued` → `sent` | `failed`
 - `attempts` — how many times the provider was called
 - `providerRef` — Resend message id / Twilio message sid, for tracing a
@@ -244,7 +268,9 @@ npm test
 
 Coverage today: dispatch idempotency (send once per key; duplicate events and
 previously-failed rows never re-send), retry sweep (backoff timing, attempt
-cap, missing transport), `notify` never throwing (store failures reported as
-non-delivery), preference gating (consent + phone required for SMS), the
-Twilio transport (request shape, provider sid, rejection), the retry policy
-table, and the PHI rule (no template quotes the appointment reason).
+cap, missing transport, and that a retried send keeps its HTML body), `notify`
+never throwing (store failures reported as non-delivery), preference gating
+(consent + phone required for SMS), the Twilio and Resend transports (request
+shape, provider id, rejection), the email layout (document shape, escaping,
+client-safety, preheader), the retry policy table, and the PHI rule (no
+template quotes the appointment reason — in text, HTML or SMS).

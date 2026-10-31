@@ -1,6 +1,6 @@
-import { eq } from "drizzle-orm";
+import { eq, sql } from "drizzle-orm";
 import { getDb } from "@/db";
-import { appointments, doctors, patients, users } from "@/db/schema";
+import { appointments, doctors, patients, payments, users } from "@/db/schema";
 import type { AppointmentMailContext } from "./templates";
 
 /**
@@ -25,6 +25,15 @@ export async function appointmentMailContext(
       doctorName: doctors.fullName,
       specialization: doctors.specialization,
       fee: doctors.consultationFee,
+      // Newest settled payment for this visit, so a payment-confirmed email can
+      // link straight to its receipt. Null while nothing has been captured.
+      paymentId: sql<number | null>`(
+        select ${payments.id} from ${payments}
+        where ${payments.appointmentId} = ${appointments.id}
+          and ${payments.status} = 'succeeded'
+        order by ${payments.id} desc
+        limit 1
+      )`,
     })
     .from(appointments)
     .innerJoin(patients, eq(patients.id, appointments.patientId))
@@ -48,5 +57,6 @@ export async function appointmentMailContext(
     reason: row.reason,
     fee: row.fee,
     currency: "INR",
+    paymentId: row.paymentId,
   };
 }
