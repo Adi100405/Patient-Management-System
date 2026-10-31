@@ -224,7 +224,7 @@ export const reminders = pgTable("reminders", {
 export type Reminder = typeof reminders.$inferSelect;
 export type ReminderKind = Reminder["kind"];
 
-export const notificationChannelEnum = pgEnum("notification_channel", ["email", "sms"]);
+export const notificationChannelEnum = pgEnum("notification_channel", ["email", "sms", "whatsapp"]);
 export const notificationStatusEnum = pgEnum("notification_status", [
   "queued",
   "sent",

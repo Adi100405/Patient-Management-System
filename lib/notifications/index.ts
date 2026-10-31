@@ -1,6 +1,6 @@
 import { logChannel } from "./channels/log";
 import { createResendChannel } from "./channels/resend";
-import { createTwilioChannel } from "./channels/twilio";
+import { createTwilioChannel, createTwilioWhatsAppChannel } from "./channels/twilio";
 import { dispatchNotification, retryDueNotifications } from "./dispatch";
 import { dbNotificationStore, type NotificationStore } from "./store";
 import type {
@@ -35,9 +35,23 @@ function channelFor(name: NotificationChannelName): NotificationChannel | null {
       return getNotificationChannel();
     case "sms":
       return createTwilioChannel();
+    case "whatsapp":
+      return createTwilioWhatsAppChannel();
     default:
       return null;
   }
+}
+
+/**
+ * Which transport carries the patient's short "mobile" message.
+ *
+ * WhatsApp wins whenever it is configured: same Twilio account and same single
+ * short message per event, but a message patients actually read. Without
+ * WhatsApp credentials this stays SMS — which is itself skipped while SMS is
+ * unconfigured, never faked.
+ */
+export function mobileChannelName(): NotificationChannelName {
+  return createTwilioWhatsAppChannel() ? "whatsapp" : "sms";
 }
 
 export type NotifyResult = {

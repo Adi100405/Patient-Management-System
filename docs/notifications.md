@@ -39,7 +39,7 @@ Key files:
 | `lib/notifications/store.ts` | Drizzle implementation of the ledger. |
 | `lib/notifications/retry-policy.ts` | `MAX_ATTEMPTS` and the backoff table. |
 | `lib/notifications/reminders.ts` | Reminder sweep (24h / 1h before the visit). |
-| `lib/notifications/channels/` | Transports: `resend.ts`, `twilio.ts`, `log.ts`. |
+| `lib/notifications/channels/` | Transports: `resend.ts`, `twilio.ts` (SMS and WhatsApp), `log.ts`. |
 
 ## Channels
 
@@ -59,26 +59,40 @@ Setup:
 3. Add the env vars in Vercel (Project → Settings → Environment Variables) and
    redeploy.
 
-### SMS — Twilio
+### Mobile — WhatsApp (preferred) and SMS via Twilio
+
+One Twilio account carries both. **WhatsApp wins the mobile channel whenever it
+is configured**; otherwise the same short message goes by SMS. One transport per
+event either way, so a patient never gets both.
 
 | Env var | Required | Notes |
 |---|---|---|
-| `TWILIO_ACCOUNT_SID` | for real SMS | From the Twilio console. |
-| `TWILIO_AUTH_TOKEN` | for real SMS | Paired auth token. |
-| `TWILIO_FROM` | for real SMS | An SMS-capable number or messaging service, E.164 (e.g. `+14155550123`). |
+| `TWILIO_ACCOUNT_SID` | for WhatsApp or SMS | From the Twilio console. |
+| `TWILIO_AUTH_TOKEN` | for WhatsApp or SMS | Paired auth token. |
+| `TWILIO_WHATSAPP_FROM` | to enable WhatsApp | Set it to turn the mobile channel into WhatsApp; `+14155238886` is the free sandbox. Left unset, mobile messages stay SMS. |
+| `TWILIO_FROM` | for SMS | An SMS-capable number or messaging service, E.164. |
 
-Setup:
+WhatsApp sandbox — free, no business verification:
 
-1. Create a Twilio account; buy an SMS-capable number (or configure a
-   Messaging Service).
-2. Set the three env vars. **If any is missing, SMS is silently skipped** —
-   attempts are still recorded on the ledger as not delivered. SMS never
-   "falls back" to the log channel, because a printed SMS could be mistaken
-   for a delivery.
-3. Patient numbers are stored E.164-ish (optional `+`, 10–15 digits) and
-   validated by the preferences action; Twilio requires E.164 on both sides.
+1. In the Twilio console open **Messaging → Try it out → Send a WhatsApp message**.
+2. From the patient's phone, send the displayed `join <keyword>` to
+   `+14155238886`. Until a number joins, Twilio rejects messages to it.
+3. Set `TWILIO_ACCOUNT_SID`, `TWILIO_AUTH_TOKEN` and
+   `TWILIO_WHATSAPP_FROM="+14155238886"`, then redeploy. WhatsApp becomes the
+   mobile channel the moment that sender is configured.
 
-Both transports use plain `fetch` with an 8-second timeout, so a hung provider
+Limits worth knowing: the sandbox is a development tool, and WhatsApp accepts
+free-form text only inside the 24-hour window opened by the recipient's last
+message (`join` opens it). Outside that window Twilio rejects the send and the
+ledger records the reason — nothing is reported as delivered. Production needs
+an approved WhatsApp sender and pre-approved message templates.
+
+SMS: set `TWILIO_FROM` as well. Indian numbers additionally require TRAI **DLT**
+registration (entity, sender ID, templates), which no provider can skip. Missing
+WhatsApp/SMS configuration means the attempt is recorded as not delivered, never
+faked by a fallback.
+
+Every transport uses plain `fetch` with an 8-second timeout, so a hung provider
 can never hold up a booking, payment or refund.
 
 ## Email rendering
@@ -115,8 +129,8 @@ message.
 | Reminder (24h / 1h) | Reminder sweep finds a due window | none — the `reminders` table owns reminder dedup |
 
 Every event renders one email and, when the template has one and the patient
-opted in, one SMS. Each channel gets its own ledger row keyed
-`<key>:email` / `<key>:sms`.
+opted in, one short mobile message. Each channel gets its own ledger row keyed
+`<key>:email` / `<key>:<mobile channel>` (`sms` or `whatsapp`).
 
 ### Reminders
 
@@ -174,7 +188,7 @@ a row stays `failed` for humans to look at.
 
 ### Content safety
 
-No notification — email or SMS — ever quotes the patient's free-text
+No notification — email, SMS or WhatsApp — ever quotes the patient's free-text
 appointment reason, which is medical content. This is enforced by test
 (`lib/notifications/__tests__/preferences.test.ts`).
 
@@ -184,9 +198,9 @@ The patient dashboard's "Notification preferences" card (`components/
 notification-preferences.tsx`, action in `actions/notifications.ts`) controls:
 
 - **Email updates** — on by default; transactional mail to the sign-in address.
-- **SMS updates** — off by default. Requires both a stored mobile number and a
-  dated consent tick; disabling clears the consent so a later re-enable needs
-  a fresh, dated one.
+- **Mobile updates** — off by default; sent over WhatsApp when it is configured,
+  otherwise SMS. Requires both a stored mobile number and a dated consent tick;
+  disabling clears the consent so a later re-enable needs a fresh, dated one.
 - **Marketing opt-in** — reserved for optional promotional communication; no
   marketing message is sent today. Appointment messages never depend on it.
 
@@ -270,7 +284,9 @@ Coverage today: dispatch idempotency (send once per key; duplicate events and
 previously-failed rows never re-send), retry sweep (backoff timing, attempt
 cap, missing transport, and that a retried send keeps its HTML body), `notify`
 never throwing (store failures reported as non-delivery), preference gating
-(consent + phone required for SMS), the Twilio and Resend transports (request
-shape, provider id, rejection), the email layout (document shape, escaping,
-client-safety, preheader), the retry policy table, and the PHI rule (no
-template quotes the appointment reason — in text, HTML or SMS).
+(consent + phone required for mobile messages), the Twilio SMS and WhatsApp
+transports (request shape, address prefixing, provider id, rejection), the
+Resend transport (request shape, provider id, rejection), the email layout
+(document shape, escaping, client-safety, preheader), the retry policy table,
+and the PHI rule (no template quotes the appointment reason — in text, HTML or a
+mobile message).

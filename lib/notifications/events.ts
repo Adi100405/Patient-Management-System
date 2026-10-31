@@ -1,4 +1,4 @@
-import { notify } from "./index";
+import { mobileChannelName, notify } from "./index";
 import { appointmentMailContext } from "./context";
 import {
   appointmentCancelled,
@@ -20,17 +20,17 @@ import type { RefundOutcome } from "@/lib/refunds/service";
  * or a dead provider all end as a logged no-op, never as a thrown error. A
  * booking must not fail because email is down.
  *
- * Each event renders once into an email and (where a template has one) an SMS,
- * then delivers both through the patient's own channel choices — so a patient
- * who has not consented to SMS never receives one, and one who has disabled
- * email is not emailed behind their back.
+ * Each event renders once into an email and (where a template has one) a short
+ * mobile message, then delivers both through the patient's own channel choices
+ * — so a patient who has not consented to mobile messages never receives one,
+ * and one who has disabled email is not emailed behind their back.
  */
 
 async function contextFor(appointmentId: number) {
   return appointmentMailContext(appointmentId);
 }
 
-type DeliveryReport = { email: NotifyResult | null; sms: NotifyResult | null };
+type DeliveryReport = { email: NotifyResult | null; mobile: NotifyResult | null };
 
 async function deliver(
   ctx: AppointmentMailContext,
@@ -40,12 +40,16 @@ async function deliver(
   const prefs = await preferencesForUser(ctx.patientUserId);
   const plan = channelsFor(prefs, { phone: ctx.patientPhone });
 
+  // One transport carries the short message: WhatsApp once configured, else
+  // SMS. The patient consented to "mobile updates", not to a specific network.
+  const mobile = mobileChannelName();
+
   // Per-channel idempotency keys: one ledger row per channel, so a duplicate
   // event can never double-send on either transport.
   const emailKey = options.idempotencyKey ? `${options.idempotencyKey}:email` : null;
-  const smsKey = options.idempotencyKey ? `${options.idempotencyKey}:sms` : null;
+  const mobileKey = options.idempotencyKey ? `${options.idempotencyKey}:${mobile}` : null;
 
-  const [email, sms] = await Promise.all([
+  const [email, mobileResult] = await Promise.all([
     plan.email
       ? notify(
           {
@@ -66,12 +70,12 @@ async function deliver(
             text: content.sms,
             meta: { kind: options.kind },
           },
-          { channel: "sms", idempotencyKey: smsKey },
+          { channel: mobile, idempotencyKey: mobileKey },
         )
       : Promise.resolve(null),
   ]);
 
-  return { email, sms };
+  return { email, mobile: mobileResult };
 }
 
 export async function sendBookingConfirmation(

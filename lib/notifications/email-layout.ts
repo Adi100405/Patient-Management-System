@@ -30,7 +30,7 @@ export type EmailContent = {
 
 // The app's own palette (app/globals.css). Email cannot read CSS variables, so
 // the handful of values it needs are repeated here as hex.
-const TEAL = "#0f766e";
+const TEAL = "#057f75";
 const INK_900 = "#211d18";
 const INK_700 = "#4b4339";
 const INK_500 = "#7a7164";
@@ -105,7 +105,7 @@ export function renderEmail(content: EmailContent): string {
           <tr>
             <td style="background-color:${TEAL};padding:20px 28px;">
               <span style="font-size:18px;font-weight:700;letter-spacing:-0.01em;color:#ffffff;">Medrella</span>
-              <span style="font-size:12px;color:#ccfbf1;">&nbsp;&middot;&nbsp;Appointment update</span>
+              <span style="font-size:12px;color:#c0fcf7;">&nbsp;&middot;&nbsp;Appointment update</span>
             </td>
           </tr>
           <tr>

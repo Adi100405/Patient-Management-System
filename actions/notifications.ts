@@ -49,7 +49,7 @@ export async function updateNotificationPreferences(
   const { emailEnabled, smsEnabled, smsConsent, marketingOptIn, phone } = parsed.data;
 
   // Guard rails the UI cannot enforce alone: a patient must keep one reachable
-  // channel, and SMS needs both a number and a recorded consent.
+  // channel, and mobile messaging needs both a number and a recorded consent.
   if (!emailEnabled && !smsEnabled) {
     return {
       error:
@@ -57,10 +57,10 @@ export async function updateNotificationPreferences(
     };
   }
   if (smsEnabled && !phone) {
-    return { error: "Add your mobile number to receive SMS updates." };
+    return { error: "Add your mobile number to receive mobile updates." };
   }
   if (smsEnabled && !smsConsent) {
-    return { error: "Please tick the consent box so we may text you." };
+    return { error: "Please tick the consent box so we may message you." };
   }
   if (smsEnabled) {
     const phoneCheck = phoneSchema.safeParse(phone);

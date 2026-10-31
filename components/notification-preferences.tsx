@@ -73,8 +73,8 @@ export function NotificationPreferences({ initial }: { initial: InitialPreferenc
             <Row
               name="smsEnabled"
               defaultChecked={initial.smsEnabled}
-              title="SMS updates"
-              description="Short text messages for bookings, changes and appointment reminders."
+              title="Mobile updates"
+              description="Short messages by SMS or WhatsApp for bookings, changes and appointment reminders."
             />
           </div>
 
@@ -103,8 +103,8 @@ export function NotificationPreferences({ initial }: { initial: InitialPreferenc
                   className={checkboxClass}
                 />
                 <span className="text-xs leading-relaxed text-ink-600">
-                  I agree to receive service messages about my appointments by SMS. Turning SMS on
-                  records the date of this tick as the moment of consent.
+                  I agree to receive service messages about my appointments by SMS or WhatsApp.
+                  Turning mobile updates on records the date of this tick as the moment of consent.
                 </span>
               </label>
               <label className="flex cursor-pointer items-start gap-3">
