@@ -16,6 +16,20 @@
   --color-ink-700: #4b4339;
   --color-ink-600: #645b4f;
   --color-ink-500: #7a7164;
+
+  /* The care accent: Tailwind's teal hue (175) with the intensity lifted, so it
+     reads deliberate rather than washed out against the ivory paper. teal-700
+     keeps a 4.9:1 contrast against white text (buttons, letterhead). */
+  --color-teal-50: #f0fffe;
+  --color-teal-100: #c0fcf7;
+  --color-teal-200: #8ef6ed;
+  --color-teal-300: #53eee1;
+  --color-teal-400: #1ce3d2;
+  --color-teal-500: #15bcae;
+  --color-teal-600: #079d90;
+  --color-teal-700: #057f75;
+  --color-teal-800: #066058;
+  --color-teal-900: #064b46;
 }
 
 html {
@@ -30,7 +44,7 @@ body {
 
 /* One soft focus treatment everywhere, so keyboard users see the same care. */
 :focus-visible {
-  outline: 2px solid #0f766e;
+  outline: 2px solid #057f75;
   outline-offset: 2px;
 }
 

@@ -6,7 +6,7 @@
  */
 
 /** The transport a message travels on. Kept separate from the provider name. */
-export type NotificationChannelName = "email" | "sms";
+export type NotificationChannelName = "email" | "sms" | "whatsapp";
 
 /** Lifecycle of a ledger row. */
 export type NotificationStatus = "queued" | "sent" | "failed";

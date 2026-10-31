@@ -176,7 +176,7 @@ export function PaymentCheckout({
       currency: order.currency,
       name: "Medrella",
       description: "Consultation fee",
-      theme: { color: "#0f766e" },
+      theme: { color: "#057f75" },
       handler: (response) => {
         // The success screen is a hint, never the truth: the server verifies
         // the payment with the gateway API (real capture, right amount) and
