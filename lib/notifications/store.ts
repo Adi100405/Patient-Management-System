@@ -17,6 +17,8 @@ export type NotificationRecord = {
   recipient: string;
   subject: string | null;
   body: string;
+  /** HTML rendering of the same message; null for SMS and text-only sends. */
+  htmlBody: string | null;
   status: NotificationStatus;
   attempts: number;
 };
@@ -27,6 +29,7 @@ export type NotificationDraft = {
   recipient: string;
   subject: string | null;
   body: string;
+  htmlBody: string | null;
   /** Null when the message should always be sent, never deduplicated. */
   idempotencyKey: string | null;
 };
@@ -53,6 +56,7 @@ function toRecord(row: typeof notifications.$inferSelect): NotificationRecord {
     recipient: row.recipient,
     subject: row.subject,
     body: row.body,
+    htmlBody: row.htmlBody,
     status: row.status,
     attempts: row.attempts,
   };
@@ -73,6 +77,7 @@ export const dbNotificationStore: NotificationStore = {
         recipient: draft.recipient,
         subject: draft.subject,
         body: draft.body,
+        htmlBody: draft.htmlBody,
         status: "queued",
         attempts: 1,
         idempotencyKey: draft.idempotencyKey,

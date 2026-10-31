@@ -250,6 +250,12 @@ export const notifications = pgTable("notifications", {
   recipient: text("recipient").notNull(),
   subject: text("subject"),
   body: text("body").notNull(),
+  /**
+   * HTML rendering of the same message. Stored (not just the text) because the
+   * retry sweep re-sends from this row: without it, a retried email would
+   * silently downgrade to plain text.
+   */
+  htmlBody: text("html_body"),
   status: notificationStatusEnum("status").notNull().default("queued"),
   /** Number of delivery attempts made so far. */
   attempts: integer("attempts").notNull().default(0),

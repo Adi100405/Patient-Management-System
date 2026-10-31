@@ -12,16 +12,19 @@ import type { NotificationChannel, NotificationMessage } from "../types";
  */
 const RESEND_API_URL = "https://api.resend.com/emails";
 
-export function createResendChannel(): NotificationChannel | null {
+export type FetchLike = (input: string, init?: RequestInit) => Promise<Response>;
+
+export function createResendChannel(deps?: { fetchImpl?: FetchLike }): NotificationChannel | null {
   const apiKey = process.env.RESEND_API_KEY;
   if (!apiKey) return null;
 
   const from = process.env.RESEND_FROM ?? "Medrella <onboarding@resend.dev>";
+  const doFetch = deps?.fetchImpl ?? fetch;
 
   return {
     name: "resend",
     async send(message: NotificationMessage) {
-      const response = await fetch(RESEND_API_URL, {
+      const response = await doFetch(RESEND_API_URL, {
         method: "POST",
         headers: {
           Authorization: `Bearer ${apiKey}`,
@@ -32,6 +35,9 @@ export function createResendChannel(): NotificationChannel | null {
           to: [message.to],
           subject: message.subject,
           text: message.text,
+          // Omitted entirely when there is no HTML body: Resend treats a
+          // present-but-empty `html` as the message body and would send nothing.
+          ...(message.html ? { html: message.html } : {}),
         }),
         // Bounded so a hung provider can never hold up the booking, refund or
         // webhook flow that triggered the send.

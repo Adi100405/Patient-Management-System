@@ -16,6 +16,12 @@ export type NotificationMessage = {
   subject: string;
   /** Plain-text body. Plain text keeps templates honest and readable everywhere. */
   text: string;
+  /**
+   * Optional HTML body. Providers send it alongside the text, so clients that
+   * render HTML show the branded message and a fallback still receives the
+   * plain text. Absent for SMS and for any text-only send.
+   */
+  html?: string | null;
   /** Free-form labels stored alongside the send for debugging and audit. */
   meta?: Record<string, string>;
 };

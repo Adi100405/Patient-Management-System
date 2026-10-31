@@ -2,7 +2,11 @@ import { describe, expect, it, vi } from "vitest";
 import { notify, notifyWith } from "@/lib/notifications";
 import { dispatchNotification, retryDueNotifications } from "@/lib/notifications/dispatch";
 import { MAX_ATTEMPTS, backoffFor } from "@/lib/notifications/retry-policy";
-import type { NotificationRecord, NotificationStore } from "@/lib/notifications/store";
+import type {
+  NotificationDraft,
+  NotificationRecord,
+  NotificationStore,
+} from "@/lib/notifications/store";
 import type { NotificationChannel, NotificationMessage } from "@/lib/notifications/types";
 
 type StoredRow = NotificationRecord & {
@@ -20,14 +24,7 @@ class MemoryStore implements NotificationStore {
   readonly rows: StoredRow[] = [];
   private sequence = 0;
 
-  async claim(draft: {
-    kind: string;
-    channel: NotificationRecord["channel"];
-    recipient: string;
-    subject: string | null;
-    body: string;
-    idempotencyKey: string | null;
-  }): Promise<{ record: NotificationRecord; created: boolean }> {
+  async claim(draft: NotificationDraft): Promise<{ record: NotificationRecord; created: boolean }> {
     if (draft.idempotencyKey !== null) {
       const existing = this.rows.find((row) => row.idempotencyKey === draft.idempotencyKey);
       if (existing) return { record: existing, created: false };
@@ -40,6 +37,7 @@ class MemoryStore implements NotificationStore {
       recipient: draft.recipient,
       subject: draft.subject,
       body: draft.body,
+      htmlBody: draft.htmlBody,
       status: "queued",
       attempts: 1,
       idempotencyKey: draft.idempotencyKey,
@@ -185,6 +183,35 @@ describe("retryDueNotifications", () => {
 
     expect(outcome).toEqual({ retried: 1, sent: 1 });
     expect(store.rows[0]).toMatchObject({ status: "sent", attempts: 2, providerRef: "msg_456" });
+  });
+
+  it("carries the html body across a retry so a rich email is never downgraded", async () => {
+    const store = new MemoryStore();
+    const send = vi
+      .fn<NotificationChannel["send"]>()
+      .mockRejectedValueOnce(new Error("provider down"))
+      .mockResolvedValueOnce({});
+    const rich: NotificationMessage = {
+      ...message,
+      html: "<!doctype html><p>Your appointment is booked.</p>",
+    };
+
+    await dispatchNotification(
+      rich,
+      { kind: "booking_confirmed", channel: "email", idempotencyKey: "booking_confirmed:42" },
+      { store, channel: channel(send), now: t0 },
+    );
+    // The ledger keeps the rich body, not only the text fallback.
+    expect(store.rows[0]?.htmlBody).toBe(rich.html);
+
+    await retryDueNotifications({
+      store,
+      resolveChannel: () => channel(send),
+      now: new Date(t0.getTime() + backoffFor(1) + 1_000),
+    });
+
+    const retried = send.mock.calls.at(1)?.at(0);
+    expect(retried?.html).toBe(rich.html);
   });
 
   it("stops retrying once the attempt cap is reached", async () => {

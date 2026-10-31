@@ -59,6 +59,8 @@ const ctx: AppointmentMailContext = {
   specialization: "Cardiology",
   date: "2026-11-02",
   time: "10:30",
+  // The settled payment behind this visit; the receipt link needs it.
+  paymentId: 38,
   // Deliberately sensitive: if any template quotes this, the PHI rule is broken.
   reason: "diabetes follow-up, blood sugar high",
   fee: "600.00",
@@ -85,6 +87,9 @@ describe("templates", () => {
     for (const content of contents) {
       expect(content.text).not.toContain(ctx.reason ?? "");
       expect(content.subject).not.toContain(ctx.reason ?? "");
+      // The HTML rendering carries the same rule: escaping the reason would
+      // still be a leak, so the content itself must never reach the markup.
+      expect(content.html).not.toContain(ctx.reason ?? "");
       if (content.sms) expect(content.sms).not.toContain(ctx.reason ?? "");
     }
   });
@@ -92,11 +97,24 @@ describe("templates", () => {
   it("always brand SMS and name the doctor in email, so a message is self-explanatory", () => {
     for (const content of contents) {
       expect(content.text).toContain("Rao");
+      expect(content.html).toContain("Rao");
       if (content.sms) {
         expect(content.sms.startsWith("Medrella:")).toBe(true);
         expect(content.sms.length).toBeGreaterThan(20);
       }
     }
+  });
+
+  it("renders every email as a complete, linked HTML document", () => {
+    for (const content of contents) {
+      expect(content.html.startsWith("<!doctype html>")).toBe(true);
+      // Every mail offers the patient a next step back into the app.
+      expect(content.html).toContain("/dashboard/patient");
+    }
+  });
+
+  it("sends a settled payment straight to its receipt", () => {
+    expect(paymentConfirmed(ctx).html).toContain("/dashboard/patient/receipts/38");
   });
 
   it("keep every SMS short enough to read in one glance", () => {
