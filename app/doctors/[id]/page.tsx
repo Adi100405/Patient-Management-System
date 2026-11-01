@@ -1,15 +1,16 @@
 import Link from "next/link";
 import { notFound } from "next/navigation";
 import { and, asc, eq, gte, lte } from "drizzle-orm";
+import { Briefcase, CalendarClock, CalendarDays, GraduationCap, Wallet } from "lucide-react";
 import { getDb } from "@/db";
 import { appointments, availability, doctors } from "@/db/schema";
 import { Badge } from "@/components/ui/badge";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
-import { SlotPicker } from "@/components/slot-picker";
+import { BookingPanel } from "@/components/booking-panel";
 import { releaseExpiredPayments } from "@/lib/payments/expire";
 import { getSession } from "@/lib/session";
 import { availableSlots, buildSlots, upcomingDays } from "@/lib/slots";
-import { cn, formatCurrency, formatDate, formatTime } from "@/lib/utils";
+import { formatCurrency, formatDate, formatTime } from "@/lib/utils";
 
 export const dynamic = "force-dynamic";
 
@@ -79,21 +80,64 @@ export default async function DoctorProfilePage({
     };
   });
 
+  const WEEKDAYS = [
+    "Sunday",
+    "Monday",
+    "Tuesday",
+    "Wednesday",
+    "Thursday",
+    "Friday",
+    "Saturday",
+  ];
+
+  // Everything the client picker needs, per day: its label and its free slots.
+  // Built once here so switching days in the browser needs no server round
+  // trip — the booking action is the only thing that ever hits the server.
+  const bookingDays = dayOptions.map((day) => ({
+    date: day.date,
+    weekday: day.isToday ? "Today" : (WEEKDAYS[day.dayOfWeek]?.slice(0, 3) ?? ""),
+    dayLabel: formatDate(day.date).replace(/^[A-Za-z]+,\s*/, ""),
+    slots: day.times.map((time) => ({
+      time,
+      availabilityId:
+        day.windows.find((w) => buildSlots(w).includes(time))?.id ?? day.windows[0]!.id,
+    })),
+  }));
+
   // Prefer the requested day, then the first day that still has a free slot, so
   // the picker never opens on an empty "no slots left" state.
-  const activeDay =
-    dayOptions.find((day) => day.date === dateParam) ??
-    dayOptions.find((day) => day.times.length > 0) ??
-    dayOptions[0];
+  const initialDate =
+    bookingDays.find((day) => day.date === dateParam)?.date ??
+    bookingDays.find((day) => day.slots.length > 0)?.date ??
+    bookingDays[0]?.date ??
+    "";
 
-  const slots: { time: string; availabilityId: number }[] = activeDay
-    ? activeDay.times.map((time) => ({
-        time,
-        availabilityId:
-          activeDay.windows.find((w) => buildSlots(w).includes(time))?.id ??
-          activeDay.windows[0]!.id,
-      }))
-    : [];
+  // The weekly schedule as a patient reads it: one tile per consulting day,
+  // Monday first.
+  const weeklySchedule = [...new Set(windows.map((w) => w.dayOfWeek))]
+    .sort((a, b) => ((a + 6) % 7) - ((b + 6) % 7))
+    .map((day) => ({
+      dayOfWeek: day,
+      label: WEEKDAYS[day] ?? "",
+      short: (WEEKDAYS[day] ?? "").slice(0, 3),
+      ranges: windows
+        .filter((w) => w.dayOfWeek === day)
+        .map((w) => ({ id: w.id, start: w.startTime, end: w.endTime })),
+    }));
+
+  const slotLengths = [...new Set(windows.map((w) => w.slotMinutes))];
+
+  const weeklyHours = Math.round(
+    windows.reduce((total, w) => total + minutesBetween(w.startTime, w.endTime), 0) / 60,
+  );
+
+  const consultingDays =
+    windows.length > 0
+      ? [...new Set(windows.map((w) => w.dayOfWeek))]
+          .sort((a, b) => ((a + 6) % 7) - ((b + 6) % 7))
+          .map((day) => WEEKDAYS[day]?.slice(0, 3) ?? "")
+          .join(", ")
+      : "Not set";
 
   return (
     <div className="space-y-6">
@@ -102,53 +146,108 @@ export default async function DoctorProfilePage({
       </Link>
 
       <div className="grid gap-6 lg:grid-cols-[1fr_380px]">
-        <Card>
+        <Card className="min-w-0">
           <CardHeader>
-            <div className="flex flex-wrap items-center justify-between gap-2">
-              <div>
-                <CardTitle className="text-xl">{doctor.fullName}</CardTitle>
+            <div className="flex items-start gap-4">
+              <span
+                aria-hidden="true"
+                className="grid h-14 w-14 shrink-0 place-items-center rounded-2xl bg-teal-50 text-lg font-semibold text-teal-800 ring-1 ring-inset ring-teal-100"
+              >
+                {initials(doctor.fullName)}
+              </span>
+              <div className="min-w-0 flex-1 space-y-1.5">
+                <div className="flex flex-wrap items-center gap-2">
+                  <CardTitle className="text-xl">{doctor.fullName}</CardTitle>
+                  <Badge variant="booked">Verified</Badge>
+                </div>
                 <p className="text-sm font-medium text-teal-700">{doctor.specialization}</p>
+                <p className="text-sm leading-relaxed text-ink-600">
+                  {doctor.bio ??
+                    `${doctor.fullName} is a ${doctor.specialization.toLowerCase()} specialist with ${doctor.experienceYears} years of clinical experience.`}
+                </p>
               </div>
-              <Badge variant="booked">Verified doctor</Badge>
             </div>
           </CardHeader>
-          <CardContent className="space-y-5 text-sm text-ink-600">
-            <p>
-              {doctor.bio ??
-                `${doctor.fullName} is a ${doctor.specialization.toLowerCase()} specialist with ${doctor.experienceYears} years of clinical experience.`}
-            </p>
-            <dl className="grid grid-cols-2 gap-4">
-              <div>
-                <dt className="text-xs uppercase tracking-wide text-ink-500">Experience</dt>
-                <dd className="font-medium text-ink-900">{doctor.experienceYears} years</dd>
-              </div>
-              <div>
-                <dt className="text-xs uppercase tracking-wide text-ink-500">Qualification</dt>
-                <dd className="font-medium text-ink-900">{doctor.qualification ?? "MBBS"}</dd>
-              </div>
-              <div>
-                <dt className="text-xs uppercase tracking-wide text-ink-500">Consultation fee</dt>
-                <dd className="font-medium text-ink-900">{formatCurrency(doctor.consultationFee)}</dd>
-              </div>
-              <div>
-                <dt className="text-xs uppercase tracking-wide text-ink-500">Consulting days</dt>
-                <dd className="font-medium text-ink-900">
-                  {windows.length > 0
-                    ? [...new Set(windows.map((w) => ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"][w.dayOfWeek]))].join(", ")
-                    : "Not set"}
-                </dd>
-              </div>
+          <CardContent className="space-y-5">
+            <dl className="grid grid-cols-2 gap-3">
+              {[
+                { label: "Experience", value: `${doctor.experienceYears} years`, Icon: Briefcase },
+                { label: "Qualification", value: doctor.qualification ?? "MBBS", Icon: GraduationCap },
+                { label: "Consultation fee", value: formatCurrency(doctor.consultationFee), Icon: Wallet },
+                { label: "Consulting days", value: consultingDays, Icon: CalendarDays },
+              ].map((fact) => (
+                <div
+                  key={fact.label}
+                  className="rounded-xl border border-cream-200 bg-cream-50/60 p-3.5"
+                >
+                  <dt className="flex items-center gap-1.5 text-[11px] font-medium uppercase tracking-wide text-ink-500">
+                    <fact.Icon className="h-3.5 w-3.5" aria-hidden="true" />
+                    {fact.label}
+                  </dt>
+                  <dd className="mt-1.5 text-sm font-semibold text-ink-900">{fact.value}</dd>
+                </div>
+              ))}
             </dl>
 
             {windows.length > 0 && (
-              <div className="rounded-xl border border-cream-200 bg-cream-50/70 p-4">
-                <p className="text-xs uppercase tracking-wide text-ink-500">Weekly availability</p>
-                <ul className="mt-2 space-y-1">
-                  {windows.map((w) => (
-                    <li key={w.id} className="text-sm text-ink-700">
-                      {["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"][w.dayOfWeek]} ·{" "}
-                      {formatTime(w.startTime)} – {formatTime(w.endTime)}{" "}
-                      <span className="text-ink-500">({w.slotMinutes} min slots)</span>
+              <div className="overflow-hidden rounded-2xl border border-cream-200 shadow-sm">
+                <div className="bg-gradient-to-br from-teal-800 to-teal-950 px-4 py-4 text-white">
+                  <p className="flex items-center gap-1.5 text-[11px] font-semibold uppercase tracking-wide text-teal-100">
+                    <CalendarClock className="h-3.5 w-3.5" aria-hidden="true" />
+                    Weekly availability
+                  </p>
+                  <dl className="mt-3.5 grid grid-cols-3 divide-x divide-white/10 text-center">
+                    <div>
+                      <dt className="text-[10px] uppercase tracking-wide text-teal-200/80">
+                        Days a week
+                      </dt>
+                      <dd className="mt-0.5 text-lg font-semibold tabular-nums">
+                        {weeklySchedule.length}
+                      </dd>
+                    </div>
+                    <div>
+                      <dt className="text-[10px] uppercase tracking-wide text-teal-200/80">
+                        Clinic hours
+                      </dt>
+                      <dd className="mt-0.5 text-lg font-semibold tabular-nums">{weeklyHours}h</dd>
+                    </div>
+                    <div>
+                      <dt className="text-[10px] uppercase tracking-wide text-teal-200/80">
+                        Slot length
+                      </dt>
+                      <dd className="mt-0.5 text-lg font-semibold tabular-nums">
+                        {slotLengths.length === 1 ? `${slotLengths[0]}m` : "Mixed"}
+                      </dd>
+                    </div>
+                  </dl>
+                </div>
+                <ul className="divide-y divide-cream-200 bg-white">
+                  {weeklySchedule.map((day) => (
+                    <li
+                      key={day.dayOfWeek}
+                      className="flex items-center justify-between gap-3 px-4 py-2.5"
+                    >
+                      <span className="flex min-w-0 items-center gap-2.5">
+                        <span
+                          aria-hidden="true"
+                          className="grid h-8 w-8 shrink-0 place-items-center rounded-lg bg-teal-50 text-[10px] font-bold uppercase tracking-wide text-teal-800 ring-1 ring-inset ring-teal-100"
+                        >
+                          {day.short}
+                        </span>
+                        <span className="truncate text-sm font-medium text-ink-900">
+                          {day.label}
+                        </span>
+                      </span>
+                      <span className="flex flex-wrap justify-end gap-1.5">
+                        {day.ranges.map((range) => (
+                          <span
+                            key={range.id}
+                            className="rounded-lg bg-cream-50 px-2 py-1 text-xs font-medium tabular-nums text-ink-700 ring-1 ring-inset ring-cream-200"
+                          >
+                            {formatTime(range.start)} – {formatTime(range.end)}
+                          </span>
+                        ))}
+                      </span>
                     </li>
                   ))}
                 </ul>
@@ -157,51 +256,43 @@ export default async function DoctorProfilePage({
           </CardContent>
         </Card>
 
-        <Card>
-          <CardHeader>
-            <CardTitle>Book an appointment</CardTitle>
-            <p className="text-sm text-ink-500">Choose a day, then pick a free slot.</p>
+        <Card className="min-w-0">
+          <CardHeader className="gap-2">
+            <div className="flex items-start justify-between gap-3">
+              <CardTitle>Book an appointment</CardTitle>
+              <span className="shrink-0 rounded-full bg-cream-100 px-2.5 py-1 text-xs font-medium tabular-nums text-ink-700 ring-1 ring-inset ring-cream-200">
+                {formatCurrency(doctor.consultationFee)}
+                {slotLengths.length === 1 ? ` · ${slotLengths[0]} min` : ""}
+              </span>
+            </div>
+            <p className="text-sm text-ink-500">Pick a day, then choose a free slot.</p>
           </CardHeader>
-          <CardContent className="space-y-4">
+          <CardContent className="space-y-5">
             {dayOptions.length === 0 ? (
-              <p className="text-sm text-ink-600">
-                This doctor has not published availability yet. Please check back later.
+              <div className="rounded-xl border border-dashed border-cream-300 bg-cream-50/60 p-5 text-center">
+                <p className="text-sm font-medium text-ink-800">No availability published yet</p>
+                <p className="mt-1 text-sm text-ink-500">
+                  This doctor has not opened their calendar. Please check back soon.
+                </p>
+              </div>
+            ) : session?.role === "doctor" ? (
+              <p className="rounded-xl border border-amber-200 bg-amber-50 p-3.5 text-sm text-amber-800">
+                You are signed in as a doctor. Use a patient account to book.
               </p>
             ) : (
-              <>
-                <div className="flex flex-wrap gap-2">
-                  {dayOptions.map((day) => (
-                    <Link
-                      key={day.date}
-                      href={`/doctors/${doctor.id}?date=${day.date}`}
-                      className={cn(
-                        "rounded-xl border px-3 py-2 text-xs font-medium transition-colors",
-                        day.date === activeDay?.date
-                          ? "border-teal-700 bg-teal-700 text-white"
-                          : "border-cream-300 bg-white text-ink-700 hover:border-teal-300 hover:bg-teal-50/50",
-                      )}
-                    >
-                      {day.isToday ? "Today" : formatDate(day.date)}
-                      {day.times.length === 0 && (
-                        <span className="ml-1 text-[10px] opacity-70">(full)</span>
-                      )}
-                    </Link>
-                  ))}
-                </div>
+              <BookingPanel
+                doctorId={doctor.id}
+                days={bookingDays}
+                initialDate={initialDate}
+                isSignedIn={Boolean(session)}
+              />
+            )}
 
-                {session?.role === "doctor" ? (
-                  <p className="rounded-xl border border-amber-200 bg-amber-50 p-3 text-sm text-amber-800">
-                    You are signed in as a doctor. Sign in with a patient account to book.
-                  </p>
-                ) : activeDay ? (
-                  <SlotPicker
-                    doctorId={doctor.id}
-                    date={activeDay.date}
-                    slots={slots}
-                    isSignedIn={Boolean(session)}
-                  />
-                ) : null}
-              </>
+            {dayOptions.length > 0 && (
+              <p className="border-t border-cream-200 pt-4 text-xs leading-relaxed text-ink-500">
+                Cancel free up to 24 hours before your visit. Within 24 hours, 50% is
+                refunded; within 2 hours, the fee is not refundable.
+              </p>
             )}
           </CardContent>
         </Card>
@@ -218,4 +309,24 @@ export default async function DoctorProfilePage({
       )}
     </div>
   );
+}
+
+/** "Nisha Rao" -> "NR" — the same monogram the dashboards use. */
+function initials(fullName: string) {
+  return fullName
+    .replace(/^Dr\.?\s+/i, "")
+    .split(/\s+/)
+    .filter(Boolean)
+    .slice(0, 2)
+    .map((part) => part[0]?.toUpperCase() ?? "")
+    .join("");
+}
+
+/** "10:00", "14:30" -> minutes, used for the weekly-hours summary. */
+function minutesBetween(start: string, end: string) {
+  const toMinutes = (time: string) => {
+    const [h, m] = time.split(":").map(Number);
+    return (h ?? 0) * 60 + (m ?? 0);
+  };
+  return toMinutes(end) - toMinutes(start);
 }

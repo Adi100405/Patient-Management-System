@@ -10,6 +10,8 @@ import {
   type CreatePaymentOrderState,
 } from "@/actions/payments";
 import { Button } from "@/components/ui/button";
+import { Spinner } from "@/components/ui/spinner";
+import { CheckCircle2, CreditCard } from "lucide-react";
 import { formatCurrency } from "@/lib/utils";
 
 type RazorpayOptions = {
@@ -227,7 +229,7 @@ export function PaymentCheckout({
         className="space-y-1.5 rounded-xl border border-teal-200 bg-teal-50 p-3.5 text-sm text-teal-900"
       >
         <p className="flex items-center gap-2 font-medium">
-          <CheckIcon className="h-4 w-4 text-teal-700" />
+          <CheckCircle2 className="h-4 w-4 text-teal-700" />
           Payment confirmed
         </p>
         <p className="text-xs text-teal-800">Your appointment is booked. Opening your receipt…</p>
@@ -317,41 +319,12 @@ export function PaymentCheckout({
           </>
         ) : (
           <>
-            <CardIcon className="h-3.5 w-3.5" />
+            <CreditCard className="h-3.5 w-3.5" />
             Pay {formatCurrency(amount)}
           </>
         )}
       </Button>
       <p className="text-[11px] text-ink-500">Slot held for 15 minutes while you pay.</p>
     </form>
-  );
-}
-
-function Spinner({ className }: { className?: string }) {
-  return (
-    <svg viewBox="0 0 24 24" fill="none" aria-hidden="true" className={`animate-spin ${className ?? ""}`}>
-      <circle cx="12" cy="12" r="9" stroke="currentColor" strokeOpacity="0.25" strokeWidth="3" />
-      <path d="M21 12a9 9 0 0 0-9-9" stroke="currentColor" strokeWidth="3" strokeLinecap="round" />
-    </svg>
-  );
-}
-
-function CardIcon({ className }: { className?: string }) {
-  return (
-    <svg viewBox="0 0 20 20" fill="currentColor" aria-hidden="true" className={className}>
-      <path d="M2.5 5.5A2.5 2.5 0 0 1 5 3h10a2.5 2.5 0 0 1 2.5 2.5V7h-15V5.5ZM2.5 8.5h15v6A2.5 2.5 0 0 1 15 17H5a2.5 2.5 0 0 1-2.5-2.5v-6Zm3 4.25a.75.75 0 0 1 .75-.75h2.5a.75.75 0 0 1 0 1.5h-2.5a.75.75 0 0 1-.75-.75Z" />
-    </svg>
-  );
-}
-
-function CheckIcon({ className }: { className?: string }) {
-  return (
-    <svg viewBox="0 0 20 20" fill="currentColor" aria-hidden="true" className={className}>
-      <path
-        fillRule="evenodd"
-        d="M10 18a8 8 0 1 0 0-16 8 8 0 0 0 0 16Zm3.7-9.3a1 1 0 0 0-1.4-1.4L9 10.6 7.7 9.3a1 1 0 0 0-1.4 1.4l2 2a1 1 0 0 0 1.4 0l4-4Z"
-        clipRule="evenodd"
-      />
-    </svg>
   );
 }

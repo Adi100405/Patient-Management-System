@@ -1,9 +1,11 @@
 import Link from "next/link";
 import { and, asc, eq, gte, inArray, lte } from "drizzle-orm";
-import { cancelAppointment } from "@/actions/booking";
+import { after } from "next/server";
+import { Bookmark, Calendar, Check, Clock, Receipt, RefreshCw } from "lucide-react";
 import { getDb } from "@/db";
 import { appointments, availability, doctors, patients, payments, users, visitNotes } from "@/db/schema";
 import type { AppointmentStatus } from "@/db/schema";
+import { CancelAppointment } from "@/components/cancel-appointment";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -11,6 +13,7 @@ import { PaymentCheckout } from "@/components/payment-checkout";
 import { NotificationPreferences } from "@/components/notification-preferences";
 import { RefundStatusLine } from "@/components/refund-status";
 import { RescheduleAppointment, type RescheduleDayOption } from "@/components/reschedule-appointment";
+import { describeCancellation } from "@/lib/cancel-preview";
 import { refundsForPatient } from "@/lib/refunds/queries";
 import { preferencesForUser } from "@/lib/notifications/preferences";
 import { sweepReminders } from "@/lib/notifications/reminders";
@@ -39,12 +42,13 @@ const statusLabel: Record<AppointmentStatus, string> = {
 export default async function PatientDashboard() {
   const session = await requireRole("patient");
 
-  // Reminders and post-visit care are derived from live state, so these sweeps
-  // are both the scheduled behaviour and their own safety net: opening the
-  // dashboard sends whatever has come due. Best-effort — a sweep failure must
-  // not take the page down.
-  await sweepReminders().catch(() => null);
-  await sweepCareFollowUps().catch(() => null);
+  // Reminders and post-visit care are derived from live state, but they are
+  // writes triggered by a page read — so they run AFTER the response is sent.
+  // The dashboard paints without waiting on them, and the daily cron remains
+  // the backstop if a sweep is ever skipped.
+  after(async () => {
+    await Promise.allSettled([sweepReminders(), sweepCareFollowUps()]);
+  });
   const db = getDb();
 
   const rows = await db
@@ -91,6 +95,28 @@ export default async function PatientDashboard() {
   const today = clinicNow().date;
   const upcoming = rows.filter((r) => r.status === "booked" && r.date >= today);
   const history = rows.filter((r) => !upcoming.includes(r)).reverse();
+
+  // History reads best as a diary: newest first, one labelled group per month,
+  // so a long trail never becomes an undifferentiated wall of cards.
+  const historyByMonth = history.reduce<
+    { key: string; label: string; rows: typeof history }[]
+  >((groups, row) => {
+    const key = row.date.slice(0, 7);
+    const existing = groups.find((group) => group.key === key);
+    if (existing) {
+      existing.rows.push(row);
+    } else {
+      groups.push({
+        key,
+        label: new Date(`${row.date}T00:00:00`).toLocaleDateString("en-IN", {
+          month: "long",
+          year: "numeric",
+        }),
+        rows: [row],
+      });
+    }
+    return groups;
+  }, []);
 
   // Free-slot options for rescheduling, computed once per doctor (not per
   // row) with the same availability logic the booking page uses. The patient's
@@ -170,11 +196,11 @@ export default async function PatientDashboard() {
       <Card className="overflow-hidden">
         <div className="grid grid-cols-2 divide-cream-200 sm:grid-cols-3 lg:grid-cols-5 lg:divide-x">
           {[
-            { label: "Upcoming", value: upcoming.length, tone: "text-teal-800", icon: <CalendarIcon /> },
-            { label: "Awaiting payment", value: awaitingPayment, tone: "text-amber-700", icon: <ClockIcon /> },
-            { label: "Total bookings", value: rows.length, tone: "text-ink-900", icon: <BookmarkIcon /> },
-            { label: "Paid to date", value: `₹${paidTotal.toFixed(0)}`, tone: "text-teal-800", icon: <ReceiptIcon /> },
-            { label: "Refunds in progress", value: refundsInProgress, tone: "text-rose-700", icon: <RefreshIcon /> },
+            { label: "Upcoming", value: upcoming.length, tone: "text-teal-800", icon: <Calendar className="h-4 w-4" /> },
+            { label: "Awaiting payment", value: awaitingPayment, tone: "text-amber-700", icon: <Clock className="h-4 w-4" /> },
+            { label: "Total bookings", value: rows.length, tone: "text-ink-900", icon: <Bookmark className="h-4 w-4" /> },
+            { label: "Paid to date", value: `₹${paidTotal.toFixed(0)}`, tone: "text-teal-800", icon: <Receipt className="h-4 w-4" /> },
+            { label: "Refunds in progress", value: refundsInProgress, tone: "text-rose-700", icon: <RefreshCw className="h-4 w-4" /> },
           ].map((stat) => (
             <div key={stat.label} className="flex items-center gap-3 p-4 last:col-span-2 last:sm:col-span-1 sm:p-5">
               <span className="grid h-9 w-9 shrink-0 place-items-center rounded-xl bg-cream-100 text-ink-500">
@@ -226,7 +252,7 @@ export default async function PatientDashboard() {
                       </p>
                       <div className="flex flex-wrap items-center gap-2">
                         <span className="inline-flex items-center gap-1.5 rounded-full bg-cream-100 px-2.5 py-1 text-xs font-medium text-ink-700">
-                          <CalendarIcon className="h-3.5 w-3.5 text-ink-500" />
+                          <Calendar className="h-3.5 w-3.5 text-ink-500" />
                           {formatDate(row.date)} · {formatTime(row.time)}
                         </span>
                         <PaymentChip row={row} />
@@ -259,12 +285,17 @@ export default async function PatientDashboard() {
                       Receipt
                     </Link>
                   )}
-                  <form action={cancelAppointment}>
-                    <input type="hidden" name="appointmentId" value={row.id} />
-                    <Button variant="ghost" size="sm" type="submit">
-                      Cancel
-                    </Button>
-                  </form>
+                  <CancelAppointment
+                    appointmentId={row.id}
+                    subject={`Dr. ${row.doctorName} · ${formatDate(row.date)} at ${formatTime(row.time)}`}
+                    preview={describeCancellation({
+                      paymentStatus: row.paymentStatus,
+                      paymentProvider: row.paymentProvider,
+                      amount: row.paymentAmount,
+                      date: row.date,
+                      time: row.time,
+                    })}
+                  />
                   {(rescheduleDays.get(row.id) ?? []).some(
                     (d) => d.times.some((time) => !(d.date === row.date && time === row.time)),
                   ) && (
@@ -285,72 +316,123 @@ export default async function PatientDashboard() {
 
       <Card>
         <CardHeader>
-          <CardTitle>History</CardTitle>
-          <p className="text-sm text-ink-500">Past and cancelled visits, with their payment trail.</p>
+          <div className="flex items-start justify-between gap-3">
+            <div>
+              <CardTitle>History</CardTitle>
+              <p className="text-sm text-ink-500">Past and cancelled visits, with their payment trail.</p>
+            </div>
+            {history.length > 0 && (
+              <span className="shrink-0 rounded-full bg-cream-100 px-2.5 py-1 text-xs font-medium tabular-nums text-ink-600 ring-1 ring-inset ring-cream-200">
+                {history.length} {history.length === 1 ? "visit" : "visits"}
+              </span>
+            )}
+          </div>
         </CardHeader>
-        <CardContent className="space-y-2.5">
+        <CardContent className="space-y-6">
           {history.length === 0 ? (
             <p className="rounded-xl border border-dashed border-cream-300 bg-cream-50/60 p-5 text-sm text-ink-500">
               Nothing here yet — past and cancelled appointments will appear here.
             </p>
           ) : (
-            history.map((row) => (
-              <div key={row.id} className="rounded-xl border border-cream-200 bg-white px-4 py-3">
-                <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
-                  <div>
-                    <p className="text-sm font-medium text-ink-800">
-                      Dr. {row.doctorName}{" "}
-                      <span className="font-normal text-ink-500">· {row.specialization}</span>
-                    </p>
-                    <p className="text-xs text-ink-500">
-                      {formatDate(row.date)} at {formatTime(row.time)}
-                    </p>
-                  </div>
-                  <div className="flex flex-wrap items-center justify-end gap-2.5">
-                    {row.paymentStatus === "succeeded" && (
-                      <span className="text-xs font-medium text-teal-700">
-                        Paid ₹{Number(row.paymentAmount).toFixed(0)}
-                      </span>
-                    )}
-                    {row.paymentStatus === "partially_refunded" && (
-                      <span className="text-xs text-ink-600">Partly refunded</span>
-                    )}
-                    {row.paymentStatus === "refunded" && (
-                      <span className="text-xs text-ink-600">Refund issued</span>
-                    )}
-                    {row.paymentStatus === "failed" && row.paymentFailure && (
-                      <span className="text-xs text-rose-600">
-                        {row.paymentFailure === "checkout_expired"
-                          ? "Payment expired"
-                          : row.paymentFailure === "cancelled_by_patient"
-                            ? "Cancelled before payment"
-                            : "Payment failed"}
-                      </span>
-                    )}
-                    <RefundStatusLine refunds={refundsByPayment.get(row.paymentId ?? -1) ?? []} />
-                    {(row.paymentStatus === "succeeded" ||
-                      row.paymentStatus === "partially_refunded" ||
-                      row.paymentStatus === "refunded") &&
-                      row.paymentId !== null && (
-                        <Link
-                          href={`/dashboard/patient/receipts/${row.paymentId}`}
-                          className="text-xs font-medium text-teal-700 hover:underline"
-                        >
-                          Receipt
-                        </Link>
-                      )}
-                    <Badge variant={statusVariant[row.status]}>{statusLabel[row.status]}</Badge>
-                  </div>
+            historyByMonth.map((group) => (
+              <section key={group.key} className="space-y-2.5">
+                <div className="flex items-center gap-3">
+                  <h3 className="text-[11px] font-semibold uppercase tracking-wide text-ink-500">
+                    {group.label}
+                  </h3>
+                  <span aria-hidden="true" className="h-px flex-1 bg-cream-200" />
+                  <span className="text-[11px] tabular-nums text-ink-500">
+                    {group.rows.length} {group.rows.length === 1 ? "visit" : "visits"}
+                  </span>
                 </div>
-                {row.status === "completed" && row.aftercare && (
-                  <details className="mt-3 rounded-lg border border-cream-200 bg-cream-50/60 px-3 py-2">
-                    <summary className="cursor-pointer text-xs font-medium text-teal-800">
-                      Aftercare instructions
-                    </summary>
-                    <p className="mt-2 whitespace-pre-line text-sm text-ink-700">{row.aftercare}</p>
-                  </details>
-                )}
-              </div>
+
+                <ol className="space-y-2">
+                  {group.rows.map((row) => (
+                    <li
+                      key={row.id}
+                      className="rounded-xl border border-cream-200 bg-white p-3.5 transition-colors hover:border-teal-200 hover:bg-teal-50/20"
+                    >
+                      <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+                        <div className="flex min-w-0 items-start gap-3">
+                          <span
+                            aria-hidden="true"
+                            className="grid h-10 w-10 shrink-0 place-items-center rounded-full bg-cream-100 text-xs font-semibold text-ink-700 ring-1 ring-inset ring-cream-200"
+                          >
+                            {initials(row.doctorName)}
+                          </span>
+                          <div className="min-w-0">
+                            <div className="flex flex-wrap items-center gap-2">
+                              <p className="truncate text-sm font-medium text-ink-900">
+                                Dr. {row.doctorName}
+                              </p>
+                              <Badge variant={statusVariant[row.status]}>
+                                {statusLabel[row.status]}
+                              </Badge>
+                            </div>
+                            <p className="text-xs text-ink-500">{row.specialization}</p>
+                            <p className="mt-1 text-xs tabular-nums text-ink-600">
+                              {formatDate(row.date)} · {formatTime(row.time)}
+                            </p>
+                          </div>
+                        </div>
+
+                        <div className="flex shrink-0 flex-wrap items-center gap-2 pl-[3.25rem] sm:justify-end sm:pl-0">
+                          {row.paymentStatus === "succeeded" && (
+                            <span className="rounded-full bg-teal-50 px-2.5 py-1 text-xs font-medium tabular-nums text-teal-800 ring-1 ring-inset ring-teal-200">
+                              Paid ₹{Number(row.paymentAmount).toFixed(0)}
+                            </span>
+                          )}
+                          {row.paymentStatus === "partially_refunded" && (
+                            <span className="rounded-full bg-amber-50 px-2.5 py-1 text-xs font-medium text-amber-800 ring-1 ring-inset ring-amber-200">
+                              Partly refunded
+                            </span>
+                          )}
+                          {row.paymentStatus === "refunded" && (
+                            <span className="rounded-full bg-cream-100 px-2.5 py-1 text-xs font-medium text-ink-700 ring-1 ring-inset ring-cream-200">
+                              Refunded
+                            </span>
+                          )}
+                          {row.paymentStatus === "failed" && row.paymentFailure && (
+                            <span className="rounded-full bg-rose-50 px-2.5 py-1 text-xs font-medium text-rose-700 ring-1 ring-inset ring-rose-200">
+                              {row.paymentFailure === "checkout_expired"
+                                ? "Payment expired"
+                                : row.paymentFailure === "cancelled_by_patient"
+                                  ? "Cancelled before payment"
+                                  : "Payment failed"}
+                            </span>
+                          )}
+                          <RefundStatusLine
+                            refunds={refundsByPayment.get(row.paymentId ?? -1) ?? []}
+                          />
+                          {(row.paymentStatus === "succeeded" ||
+                            row.paymentStatus === "partially_refunded" ||
+                            row.paymentStatus === "refunded") &&
+                            row.paymentId !== null && (
+                              <Link
+                                href={`/dashboard/patient/receipts/${row.paymentId}`}
+                                className="inline-flex items-center gap-1 rounded-full border border-cream-300 px-2.5 py-1 text-xs font-medium text-teal-700 transition-colors hover:border-teal-300 hover:bg-teal-50"
+                              >
+                                <Receipt className="h-3 w-3" aria-hidden="true" />
+                                Receipt
+                              </Link>
+                            )}
+                        </div>
+                      </div>
+
+                      {row.status === "completed" && row.aftercare && (
+                        <details className="mt-3 rounded-lg border border-cream-200 bg-cream-50/60 px-3 py-2">
+                          <summary className="cursor-pointer text-xs font-medium text-teal-800">
+                            Aftercare instructions
+                          </summary>
+                          <p className="mt-2 whitespace-pre-line text-sm text-ink-700">
+                            {row.aftercare}
+                          </p>
+                        </details>
+                      )}
+                    </li>
+                  ))}
+                </ol>
+              </section>
             ))
           )}
         </CardContent>
@@ -400,7 +482,7 @@ function PaymentChip({
   if (row.paymentStatus === "succeeded") {
     return (
       <span className="inline-flex items-center gap-1.5 rounded-full bg-teal-50 px-2.5 py-1 text-xs font-medium text-teal-800 ring-1 ring-inset ring-teal-200">
-        <CheckIcon className="h-3.5 w-3.5" />
+        <Check className="h-3.5 w-3.5" />
         Paid ₹{amount} {currency}
       </span>
     );
@@ -408,7 +490,7 @@ function PaymentChip({
   if (row.paymentStatus === "pending" && row.paymentProvider !== "manual") {
     return (
       <span className="inline-flex items-center gap-1.5 rounded-full bg-amber-50 px-2.5 py-1 text-xs font-medium text-amber-800 ring-1 ring-inset ring-amber-200">
-        <ClockIcon className="h-3.5 w-3.5" />
+        <Clock className="h-3.5 w-3.5" />
         Payment pending
       </span>
     );
@@ -424,69 +506,5 @@ function PaymentChip({
     <span className="inline-flex items-center gap-1.5 rounded-full bg-cream-100 px-2.5 py-1 text-xs font-medium text-ink-600 ring-1 ring-inset ring-cream-200">
       ₹{amount} payable at the clinic
     </span>
-  );
-}
-
-function CalendarIcon({ className = "h-4 w-4" }: { className?: string }) {
-  return (
-    <svg viewBox="0 0 20 20" fill="currentColor" aria-hidden="true" className={className}>
-      <path d="M5.75 2a.75.75 0 0 1 .75.75V4h7V2.75a.75.75 0 0 1 1.5 0V4h.25A2.75 2.75 0 0 1 18 6.75v8.5A2.75 2.75 0 0 1 15.25 18H4.75A2.75 2.75 0 0 1 2 15.25v-8.5A2.75 2.75 0 0 1 4.75 4H5V2.75A.75.75 0 0 1 5.75 2Zm10.75 6.5H3.5v6.75c0 .69.56 1.25 1.25 1.25h10.5c.69 0 1.25-.56 1.25-1.25V8.5Z" />
-    </svg>
-  );
-}
-
-function ClockIcon({ className = "h-4 w-4" }: { className?: string }) {
-  return (
-    <svg viewBox="0 0 20 20" fill="currentColor" aria-hidden="true" className={className}>
-      <path
-        fillRule="evenodd"
-        d="M10 18a8 8 0 1 0 0-16 8 8 0 0 0 0 16Zm.75-11.25a.75.75 0 0 0-1.5 0v3.5c0 .2.08.39.22.53l2.25 2.25a.75.75 0 1 0 1.06-1.06l-2.03-2.03V6.75Z"
-        clipRule="evenodd"
-      />
-    </svg>
-  );
-}
-
-function BookmarkIcon({ className = "h-4 w-4" }: { className?: string }) {
-  return (
-    <svg viewBox="0 0 20 20" fill="currentColor" aria-hidden="true" className={className}>
-      <path d="M4 4.75A1.75 1.75 0 0 1 5.75 3h8.5A1.75 1.75 0 0 1 16 4.75v11.5a.75.75 0 0 1-1.16.63L10 13.66l-4.84 3.22A.75.75 0 0 1 4 16.25V4.75Z" />
-    </svg>
-  );
-}
-
-function ReceiptIcon({ className = "h-4 w-4" }: { className?: string }) {
-  return (
-    <svg viewBox="0 0 20 20" fill="currentColor" aria-hidden="true" className={className}>
-      <path
-        fillRule="evenodd"
-        d="M4 3.75A1.75 1.75 0 0 1 5.75 2h8.5A1.75 1.75 0 0 1 16 3.75v13.5a.75.75 0 0 1-1.16.63L12 16.16l-2.84 1.72a.75.75 0 0 1-.76 0L5.56 16.16l-1.4.86A.75.75 0 0 1 3 16.39l1-12.64Zm3.25 3.5a.75.75 0 0 0 0 1.5h5.5a.75.75 0 0 0 0-1.5h-5.5Zm0 3a.75.75 0 0 0 0 1.5h3a.75.75 0 0 0 0-1.5h-3Z"
-        clipRule="evenodd"
-      />
-    </svg>
-  );
-}
-
-function RefreshIcon({ className = "h-4 w-4" }: { className?: string }) {
-  return (
-    <svg viewBox="0 0 20 20" fill="currentColor" aria-hidden="true" className={className}>
-      <path
-        fillRule="evenodd"
-        d="M15.31 4.44a.75.75 0 0 1 1.06.05l1.75 1.94a.75.75 0 0 1-.02 1L16.2 9.4a.75.75 0 0 1-1.12-1l.6-.66A6 6 0 0 0 4.28 10a6 6 0 0 0 6.4 5.7.75.75 0 0 1 .14 1.5 7.5 7.5 0 0 1-8-7.13 7.5 7.5 0 0 1 13.4-4.72l.35-.39a.75.75 0 0 1 1.06-.05l-.32 .53Z"
-        clipRule="evenodd"
-      />
-    </svg>
-  );
-}
-
-function CheckIcon({ className = "h-4 w-4" }: { className?: string }) {
-  return (
-    <svg viewBox="0 0 20 20" fill="currentColor" aria-hidden="true" className={className}>
-      <path
-        fillRule="evenodd"
-        d="M16.7 5.3a1 1 0 0 1 0 1.4l-7.5 7.5a1 1 0 0 1-1.4 0L3.3 9.7a1 1 0 1 1 1.4-1.4l3.8 3.8 6.8-6.8a1 1 0 0 1 1.4 0Z"
-        clipRule="evenodd"
-      />
-    </svg>
   );
 }

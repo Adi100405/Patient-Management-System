@@ -1,12 +1,13 @@
 import { and, asc, desc, eq, gte, lt, ne, or, sql } from "drizzle-orm";
-import { cancelAppointment } from "@/actions/booking";
+import { AlertTriangle, Calendar, Clock, Users } from "lucide-react";
 import { getDb } from "@/db";
 import { appointments, availability, patients } from "@/db/schema";
 import { AppointmentActions } from "@/components/appointment-actions";
 import { AvailabilityManager } from "@/components/availability-manager";
+import { CancelAppointment } from "@/components/cancel-appointment";
 import { Badge } from "@/components/ui/badge";
-import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import type { CancelPreview } from "@/lib/cancel-preview";
 import { requireRole } from "@/lib/session";
 import { clinicClock, clinicNow, slotArrived } from "@/lib/slots";
 import { formatDate, formatTime } from "@/lib/utils";
@@ -27,6 +28,13 @@ const statusLabel: Record<AppointmentStatus, string> = {
   cancelled: "Cancelled",
   completed: "Completed",
   no_show: "No-show",
+};
+
+/** A clinic cancellation is never the patient's fault, so it always refunds in full. */
+const CLINIC_CANCEL_PREVIEW: CancelPreview = {
+  percentage: 100,
+  headline: "Full refund if paid",
+  detail: "A clinic cancellation is always refunded in full once the patient's payment is captured.",
 };
 
 type ScheduleRow = {
@@ -61,7 +69,7 @@ function ScheduleItem({
           <p className="font-semibold text-ink-900">{row.patientName}</p>
           <div className="flex flex-wrap items-center gap-2">
             <span className="inline-flex items-center gap-1.5 rounded-full bg-cream-100 px-2.5 py-1 text-xs font-medium text-ink-700">
-              <CalendarIcon className="h-3.5 w-3.5 text-ink-500" />
+              <Calendar className="h-3.5 w-3.5 text-ink-500" />
               {formatDate(row.date)} · {formatTime(row.time)}
             </span>
             {row.patientPhone && (
@@ -79,12 +87,13 @@ function ScheduleItem({
         <Badge variant={statusVariant[row.status]}>{statusLabel[row.status]}</Badge>
         {canResolve && <AppointmentActions appointmentId={row.id} />}
         {canCancel && (
-          <form action={cancelAppointment}>
-            <input type="hidden" name="appointmentId" value={row.id} />
-            <Button variant="outline" size="sm" type="submit">
-              Cancel
-            </Button>
-          </form>
+          <CancelAppointment
+            appointmentId={row.id}
+            subject={`${row.patientName} · ${formatDate(row.date)} at ${formatTime(row.time)}`}
+            preview={CLINIC_CANCEL_PREVIEW}
+            clinicCancellation
+            variant="outline"
+          />
         )}
       </div>
     </div>
@@ -195,10 +204,10 @@ export default async function DoctorDashboard() {
       <Card className="overflow-hidden">
         <div className="grid grid-cols-2 divide-cream-200 sm:grid-cols-4 sm:divide-x">
           {[
-            { label: "Today", value: stats.today, tone: "text-teal-800", icon: <CalendarIcon /> },
-            { label: "Upcoming", value: stats.upcoming, tone: "text-ink-900", icon: <ClockIcon /> },
-            { label: "Patients seen", value: stats.patientsSeen, tone: "text-teal-800", icon: <PeopleIcon /> },
-            { label: "No-shows", value: stats.noShows, tone: "text-rose-700", icon: <AlertIcon /> },
+            { label: "Today", value: stats.today, tone: "text-teal-800", icon: <Calendar className="h-4 w-4" /> },
+            { label: "Upcoming", value: stats.upcoming, tone: "text-ink-900", icon: <Clock className="h-4 w-4" /> },
+            { label: "Patients seen", value: stats.patientsSeen, tone: "text-teal-800", icon: <Users className="h-4 w-4" /> },
+            { label: "No-shows", value: stats.noShows, tone: "text-rose-700", icon: <AlertTriangle className="h-4 w-4" /> },
           ].map((stat) => (
             <div key={stat.label} className="flex items-center gap-3 p-4 sm:p-5">
               <span className="grid h-9 w-9 shrink-0 place-items-center rounded-xl bg-cream-100 text-ink-500">
@@ -293,44 +302,4 @@ function initials(fullName: string) {
     .slice(0, 2)
     .map((part) => part[0]?.toUpperCase() ?? "")
     .join("");
-}
-
-function CalendarIcon({ className = "h-4 w-4" }: { className?: string }) {
-  return (
-    <svg viewBox="0 0 20 20" fill="currentColor" aria-hidden="true" className={className}>
-      <path d="M5.75 2a.75.75 0 0 1 .75.75V4h7V2.75a.75.75 0 0 1 1.5 0V4h.25A2.75 2.75 0 0 1 18 6.75v8.5A2.75 2.75 0 0 1 15.25 18H4.75A2.75 2.75 0 0 1 2 15.25v-8.5A2.75 2.75 0 0 1 4.75 4H5V2.75A.75.75 0 0 1 5.75 2Zm10.75 6.5H3.5v6.75c0 .69.56 1.25 1.25 1.25h10.5c.69 0 1.25-.56 1.25-1.25V8.5Z" />
-    </svg>
-  );
-}
-
-function ClockIcon({ className = "h-4 w-4" }: { className?: string }) {
-  return (
-    <svg viewBox="0 0 20 20" fill="currentColor" aria-hidden="true" className={className}>
-      <path
-        fillRule="evenodd"
-        d="M10 18a8 8 0 1 0 0-16 8 8 0 0 0 0 16Zm.75-11.25a.75.75 0 0 0-1.5 0v3.5c0 .2.08.39.22.53l2.25 2.25a.75.75 0 1 0 1.06-1.06l-2.03-2.03V6.75Z"
-        clipRule="evenodd"
-      />
-    </svg>
-  );
-}
-
-function PeopleIcon({ className = "h-4 w-4" }: { className?: string }) {
-  return (
-    <svg viewBox="0 0 20 20" fill="currentColor" aria-hidden="true" className={className}>
-      <path d="M7.5 9.5a2.75 2.75 0 1 0 0-5.5 2.75 2.75 0 0 0 0 5.5ZM2 15.25c0-2 2.24-3.75 5.5-3.75s5.5 1.75 5.5 3.75V16a1 1 0 0 1-1 1H3a1 1 0 0 1-1-1v-.75Zm12.5-6.5a2.25 2.25 0 1 0 0-4.5 2.25 2.25 0 0 0 0 4.5Zm.5 1.5c-.6 0-1.17.08-1.68.23.9.87 1.48 2 1.58 3.27H18a1 1 0 0 0 1-1v-.5c0-1.66-1.79-3-4-3Z" />
-    </svg>
-  );
-}
-
-function AlertIcon({ className = "h-4 w-4" }: { className?: string }) {
-  return (
-    <svg viewBox="0 0 20 20" fill="currentColor" aria-hidden="true" className={className}>
-      <path
-        fillRule="evenodd"
-        d="M10 18a8 8 0 1 0 0-16 8 8 0 0 0 0 16Zm0-11.5a.75.75 0 0 1 .75.75v3.5a.75.75 0 0 1-1.5 0v-3.5A.75.75 0 0 1 10 6.5Zm0 8a1 1 0 1 0 0-2 1 1 0 0 0 0 2Z"
-        clipRule="evenodd"
-      />
-    </svg>
-  );
 }
