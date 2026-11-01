@@ -27,3 +27,8 @@ export function dashboardUrl(): string {
 export function receiptUrl(paymentId: number): string {
   return `${appBaseUrl()}/dashboard/patient/receipts/${paymentId}`;
 }
+
+/** A doctor's public profile, where a follow-up can be booked. */
+export function doctorUrl(doctorId: number): string {
+  return `${appBaseUrl()}/doctors/${doctorId}`;
+}

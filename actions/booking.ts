@@ -4,13 +4,14 @@ import { and, eq, gt, isNotNull, lt, lte, or } from "drizzle-orm";
 import { revalidatePath } from "next/cache";
 import { z } from "zod";
 import { getDb } from "@/db";
-import { appointments, availability, doctors, payments } from "@/db/schema";
+import { appointments, availability, doctors, payments, visitNotes } from "@/db/schema";
 import { bookingSchema } from "@/lib/auth";
 import { isUniqueViolation } from "@/lib/db-errors";
 import { refundLineFor, sendBookingConfirmation, sendCancellationNotice, sendRescheduleNotice } from "@/lib/notifications/events";
 import { getPaymentProvider, PAYMENT_HOLD_MINUTES } from "@/lib/payments";
 import { refundForCancellation, type RefundOutcome } from "@/lib/refunds/service";
 import { requireSession } from "@/lib/session";
+import { normalizeAftercare, normalizeFollowUpDays } from "@/lib/visit-notes";
 import {
   availableSlots,
   buildSlots,
@@ -309,6 +310,20 @@ export async function resolveAppointment(
       return { error: "That appointment has already been resolved." };
     }
     return { error: "That visit has not taken place yet." };
+  }
+
+  // Aftercare is recorded only for a completed visit, and only once the status
+  // transition has succeeded — a no-show leaves no care note behind.
+  if (intent.data === "complete") {
+    const aftercare = normalizeAftercare(formData.get("aftercare"));
+    const followUpDays = normalizeFollowUpDays(formData.get("followUpDays"));
+    await db
+      .insert(visitNotes)
+      .values({ appointmentId: id, aftercare, followUpDays })
+      .onConflictDoUpdate({
+        target: visitNotes.appointmentId,
+        set: { aftercare, followUpDays, updatedAt: new Date() },
+      });
   }
 
   revalidatePath("/dashboard/doctor");

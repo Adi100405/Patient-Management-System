@@ -7,6 +7,7 @@ import {
   paymentConfirmed,
   refundUpdate,
   reminder,
+  visitThanks,
   type AppointmentMailContext,
 } from "@/lib/notifications/templates";
 
@@ -55,6 +56,7 @@ const ctx: AppointmentMailContext = {
   patientEmail: "aarav@example.com",
   patientPhone: "+919876543210",
   patientUserId: 7,
+  doctorId: 3,
   doctorName: "Kavita Rao",
   specialization: "Cardiology",
   date: "2026-11-02",
@@ -80,6 +82,7 @@ const contents = [
   refundUpdate(ctx, { stage: "initiated", amount: "600.00", currency: "INR" }),
   refundUpdate(ctx, { stage: "completed", amount: "600.00", currency: "INR" }),
   refundUpdate(ctx, { stage: "failed", amount: "600.00", currency: "INR" }),
+  visitThanks(ctx, { hasAftercare: true }),
 ];
 
 describe("templates", () => {

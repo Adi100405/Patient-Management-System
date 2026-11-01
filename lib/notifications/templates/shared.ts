@@ -1,6 +1,6 @@
 import { formatDate, formatTime } from "@/lib/utils";
 import type { EmailCta, EmailDetailRow } from "../email-layout";
-import { dashboardUrl, receiptUrl } from "../links";
+import { dashboardUrl, doctorUrl, receiptUrl } from "../links";
 
 /**
  * The vocabulary every patient message shares: the context a template reads,
@@ -18,6 +18,7 @@ export type AppointmentMailContext = {
   patientEmail: string;
   patientPhone: string | null;
   patientUserId: number;
+  doctorId: number;
   doctorName: string;
   specialization: string;
   /** Clinic wall-clock date and time of the visit. */
@@ -69,6 +70,11 @@ export function paymentCta(ctx: AppointmentMailContext): EmailCta {
   return ctx.paymentId !== null
     ? { label: "View receipt", url: receiptUrl(ctx.paymentId) }
     : dashboardCta();
+}
+
+/** A follow-up is booked where the doctor's free slots already live. */
+export function followUpCta(ctx: AppointmentMailContext): EmailCta {
+  return { label: `Book a follow-up with Dr. ${ctx.doctorName}`, url: doctorUrl(ctx.doctorId) };
 }
 
 /** Refund/reason sentences arrive with leading newlines for the text body. */

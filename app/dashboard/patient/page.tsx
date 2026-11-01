@@ -2,7 +2,7 @@ import Link from "next/link";
 import { and, asc, eq, gte, inArray, lte } from "drizzle-orm";
 import { cancelAppointment } from "@/actions/booking";
 import { getDb } from "@/db";
-import { appointments, availability, doctors, patients, payments, users } from "@/db/schema";
+import { appointments, availability, doctors, patients, payments, users, visitNotes } from "@/db/schema";
 import type { AppointmentStatus } from "@/db/schema";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -14,6 +14,7 @@ import { RescheduleAppointment, type RescheduleDayOption } from "@/components/re
 import { refundsForPatient } from "@/lib/refunds/queries";
 import { preferencesForUser } from "@/lib/notifications/preferences";
 import { sweepReminders } from "@/lib/notifications/reminders";
+import { sweepCareFollowUps } from "@/lib/notifications/care";
 import { requireRole } from "@/lib/session";
 import { availableSlots, clinicNow, upcomingDays } from "@/lib/slots";
 import { formatDate, formatTime } from "@/lib/utils";
@@ -38,10 +39,12 @@ const statusLabel: Record<AppointmentStatus, string> = {
 export default async function PatientDashboard() {
   const session = await requireRole("patient");
 
-  // Reminders are derived from live state, so this sweep is both the scheduled
-  // behaviour and its own safety net: opening the dashboard sends whatever has
-  // come due. Best-effort — a sweep failure must not take the page down.
+  // Reminders and post-visit care are derived from live state, so these sweeps
+  // are both the scheduled behaviour and their own safety net: opening the
+  // dashboard sends whatever has come due. Best-effort — a sweep failure must
+  // not take the page down.
   await sweepReminders().catch(() => null);
+  await sweepCareFollowUps().catch(() => null);
   const db = getDb();
 
   const rows = await db
@@ -61,10 +64,12 @@ export default async function PatientDashboard() {
       paymentCurrency: payments.currency,
       paymentProvider: payments.provider,
       paymentFailure: payments.failureReason,
+      aftercare: visitNotes.aftercare,
     })
     .from(appointments)
     .innerJoin(doctors, eq(appointments.doctorId, doctors.id))
     .leftJoin(payments, eq(payments.appointmentId, appointments.id))
+    .leftJoin(visitNotes, eq(visitNotes.appointmentId, appointments.id))
     .where(eq(appointments.patientId, session.profileId))
     .orderBy(asc(appointments.appointmentDate), asc(appointments.appointmentTime));
 
@@ -290,54 +295,61 @@ export default async function PatientDashboard() {
             </p>
           ) : (
             history.map((row) => (
-              <div
-                key={row.id}
-                className="flex flex-col gap-2 rounded-xl border border-cream-200 bg-white px-4 py-3 sm:flex-row sm:items-center sm:justify-between"
-              >
-                <div>
-                  <p className="text-sm font-medium text-ink-800">
-                    Dr. {row.doctorName}{" "}
-                    <span className="font-normal text-ink-500">· {row.specialization}</span>
-                  </p>
-                  <p className="text-xs text-ink-500">
-                    {formatDate(row.date)} at {formatTime(row.time)}
-                  </p>
-                </div>
-                <div className="flex flex-wrap items-center justify-end gap-2.5">
-                  {row.paymentStatus === "succeeded" && (
-                    <span className="text-xs font-medium text-teal-700">
-                      Paid ₹{Number(row.paymentAmount).toFixed(0)}
-                    </span>
-                  )}
-                  {row.paymentStatus === "partially_refunded" && (
-                    <span className="text-xs text-ink-600">Partly refunded</span>
-                  )}
-                  {row.paymentStatus === "refunded" && (
-                    <span className="text-xs text-ink-600">Refund issued</span>
-                  )}
-                  {row.paymentStatus === "failed" && row.paymentFailure && (
-                    <span className="text-xs text-rose-600">
-                      {row.paymentFailure === "checkout_expired"
-                        ? "Payment expired"
-                        : row.paymentFailure === "cancelled_by_patient"
-                          ? "Cancelled before payment"
-                          : "Payment failed"}
-                    </span>
-                  )}
-                  <RefundStatusLine refunds={refundsByPayment.get(row.paymentId ?? -1) ?? []} />
-                  {(row.paymentStatus === "succeeded" ||
-                    row.paymentStatus === "partially_refunded" ||
-                    row.paymentStatus === "refunded") &&
-                    row.paymentId !== null && (
-                      <Link
-                        href={`/dashboard/patient/receipts/${row.paymentId}`}
-                        className="text-xs font-medium text-teal-700 hover:underline"
-                      >
-                        Receipt
-                      </Link>
+              <div key={row.id} className="rounded-xl border border-cream-200 bg-white px-4 py-3">
+                <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+                  <div>
+                    <p className="text-sm font-medium text-ink-800">
+                      Dr. {row.doctorName}{" "}
+                      <span className="font-normal text-ink-500">· {row.specialization}</span>
+                    </p>
+                    <p className="text-xs text-ink-500">
+                      {formatDate(row.date)} at {formatTime(row.time)}
+                    </p>
+                  </div>
+                  <div className="flex flex-wrap items-center justify-end gap-2.5">
+                    {row.paymentStatus === "succeeded" && (
+                      <span className="text-xs font-medium text-teal-700">
+                        Paid ₹{Number(row.paymentAmount).toFixed(0)}
+                      </span>
                     )}
-                  <Badge variant={statusVariant[row.status]}>{statusLabel[row.status]}</Badge>
+                    {row.paymentStatus === "partially_refunded" && (
+                      <span className="text-xs text-ink-600">Partly refunded</span>
+                    )}
+                    {row.paymentStatus === "refunded" && (
+                      <span className="text-xs text-ink-600">Refund issued</span>
+                    )}
+                    {row.paymentStatus === "failed" && row.paymentFailure && (
+                      <span className="text-xs text-rose-600">
+                        {row.paymentFailure === "checkout_expired"
+                          ? "Payment expired"
+                          : row.paymentFailure === "cancelled_by_patient"
+                            ? "Cancelled before payment"
+                            : "Payment failed"}
+                      </span>
+                    )}
+                    <RefundStatusLine refunds={refundsByPayment.get(row.paymentId ?? -1) ?? []} />
+                    {(row.paymentStatus === "succeeded" ||
+                      row.paymentStatus === "partially_refunded" ||
+                      row.paymentStatus === "refunded") &&
+                      row.paymentId !== null && (
+                        <Link
+                          href={`/dashboard/patient/receipts/${row.paymentId}`}
+                          className="text-xs font-medium text-teal-700 hover:underline"
+                        >
+                          Receipt
+                        </Link>
+                      )}
+                    <Badge variant={statusVariant[row.status]}>{statusLabel[row.status]}</Badge>
+                  </div>
                 </div>
+                {row.status === "completed" && row.aftercare && (
+                  <details className="mt-3 rounded-lg border border-cream-200 bg-cream-50/60 px-3 py-2">
+                    <summary className="cursor-pointer text-xs font-medium text-teal-800">
+                      Aftercare instructions
+                    </summary>
+                    <p className="mt-2 whitespace-pre-line text-sm text-ink-700">{row.aftercare}</p>
+                  </details>
+                )}
               </div>
             ))
           )}

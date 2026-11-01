@@ -39,6 +39,7 @@ Key files:
 | `lib/notifications/store.ts` | Drizzle implementation of the ledger. |
 | `lib/notifications/retry-policy.ts` | `MAX_ATTEMPTS` and the backoff table. |
 | `lib/notifications/reminders.ts` | Reminder sweep (24h / 1h before the visit). |
+| `lib/notifications/care.ts` | Post-visit care sweep (thank-you, follow-up prompt). |
 | `lib/notifications/channels/` | Transports: `resend.ts`, `twilio.ts` (SMS and WhatsApp), `log.ts`. |
 
 ## Channels
@@ -127,6 +128,8 @@ message.
 | Appointment rescheduled | Slot move succeeds | `appointment_rescheduled:<id>:<old>→<new>` |
 | Refund initiated / completed / failed | Refund state transitions | `refund_<stage>:<id>` |
 | Reminder (24h / 1h) | Reminder sweep finds a due window | none — the `reminders` table owns reminder dedup |
+| Visit thanks | Care sweep finds a recently completed visit | none — the `care_follow_ups` table owns dedup |
+| Follow-up prompt | Care sweep finds a completed visit past its advised interval | none — the `care_follow_ups` table owns dedup |
 
 Every event renders one email and, when the template has one and the patient
 opted in, one short mobile message. Each channel gets its own ledger row keyed
@@ -144,6 +147,33 @@ releases its claim so the next sweep retries. Windows are defined in
 
 Triggers: the daily cron (below), and opportunistically whenever a patient
 opens their dashboard.
+
+### Post-visit care loop
+
+The visit does not end at the receipt. When a doctor resolves a visit
+**completed**, they may optionally record, on the same form:
+
+- **Aftercare instructions** — free text the patient sees on their dashboard.
+- **Recommend a follow-up in (days)** — an interval, or blank for none.
+
+Aftercare is medical content, so it is **never** copied into a message: the
+thank-you email and mobile message only point the patient at their dashboard,
+where the note lives. The same rule already protects the patient's free-text
+reason, and the tests enforce both.
+
+`sweepCareFollowUps` (`lib/notifications/care.ts`) then derives two messages
+from live state — completed visits only — exactly as reminders do:
+
+| Kind | Fires when |
+|---|---|
+| `visit_thanks` | 0–72 hours after the visit ends |
+| `follow_up_prompt` | only when the doctor set an interval, within a 72-hour window after that interval elapses |
+
+A follow-up prompt exists only when the doctor advised one, so the loop stays
+silent rather than nagging on a guess. The `care_follow_ups` table's unique
+`(appointment_id, kind)` index makes overlapping sweeps safe; a failed send
+releases its claim so the next sweep retries. Triggers: the daily cron, and
+opportunistically whenever a patient opens their dashboard.
 
 ## Reliability
 
@@ -189,8 +219,8 @@ a row stays `failed` for humans to look at.
 ### Content safety
 
 No notification — email, SMS or WhatsApp — ever quotes the patient's free-text
-appointment reason, which is medical content. This is enforced by test
-(`lib/notifications/__tests__/preferences.test.ts`).
+appointment reason or the doctor's aftercare note, which are medical content.
+This is enforced by test (`lib/notifications/__tests__/preferences.test.ts`).
 
 ## User preferences
 
@@ -213,12 +243,13 @@ still sees every update on their dashboard, which is the source of truth.
 ### Cron
 
 `GET /api/cron/daily-sweep` (Vercel Cron, authenticated with
-`Authorization: Bearer $CRON_SECRET`) runs three independent sweeps and
+`Authorization: Bearer $CRON_SECRET`) runs four independent sweeps and
 reports each one separately:
 
 1. `releaseExpiredPayments` — free slots held by abandoned checkouts
 2. `sweepReminders` — send due reminders
-3. `retryFailedNotifications` — retry failed sends past their backoff
+3. `sweepCareFollowUps` — send due post-visit care messages
+4. `retryFailedNotifications` — retry failed sends past their backoff
 
 Vercel Hobby allows daily schedules only; the dashboard-render triggers cover
 the gap during the day. On a Pro plan the cron can run every minute for
@@ -288,5 +319,6 @@ never throwing (store failures reported as non-delivery), preference gating
 transports (request shape, address prefixing, provider id, rejection), the
 Resend transport (request shape, provider id, rejection), the email layout
 (document shape, escaping, client-safety, preheader), the retry policy table,
-and the PHI rule (no template quotes the appointment reason — in text, HTML or a
+post-visit care windows and aftercare parsing (`care.test.ts`), and the PHI rule
+(no template quotes the appointment reason or aftercare — in text, HTML or a
 mobile message).
