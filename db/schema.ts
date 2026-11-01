@@ -119,6 +119,30 @@ export const appointments = pgTable(
   ],
 );
 
+/**
+ * Doctor-authored aftercare for a completed visit. One row per appointment,
+ * written at the moment the doctor resolves the visit.
+ *
+ * `aftercare` is medical content (PHI): it is shown **only** on the patient's
+ * own dashboard and is never copied into an email or mobile message. The
+ * follow-up loop links to it, it does not quote it.
+ *
+ * `followUpDays` is the doctor's recommendation ("come back in two weeks"). Null
+ * means no follow-up was advised, and therefore no follow-up prompt is sent;
+ * the loop stays silent rather than nagging on a guess.
+ */
+export const visitNotes = pgTable("visit_notes", {
+  appointmentId: integer("appointment_id")
+    .primaryKey()
+    .references(() => appointments.id, { onDelete: "cascade" }),
+  aftercare: text("aftercare"),
+  followUpDays: integer("follow_up_days"),
+  createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+  updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
+});
+
+export type VisitNote = typeof visitNotes.$inferSelect;
+
 export const payments = pgTable("payments", {
   id: serial("id").primaryKey(),
   appointmentId: integer("appointment_id")
@@ -223,6 +247,33 @@ export const reminders = pgTable("reminders", {
 
 export type Reminder = typeof reminders.$inferSelect;
 export type ReminderKind = Reminder["kind"];
+
+export const careFollowUpKindEnum = pgEnum("care_follow_up_kind", [
+  "visit_thanks",
+  "follow_up_prompt",
+]);
+
+/**
+ * Ledger of post-visit care messages already sent. Same shape and rationale as
+ * `reminders`: the sweep derives what is due from live appointment state
+ * (completed visits only), and this table's unique (appointment_id, kind) index
+ * is what keeps overlapping sweeps from sending the same message twice.
+ */
+export const careFollowUps = pgTable("care_follow_ups", {
+  id: serial("id").primaryKey(),
+  appointmentId: integer("appointment_id")
+    .notNull()
+    .references(() => appointments.id, { onDelete: "cascade" }),
+  kind: careFollowUpKindEnum("kind").notNull(),
+  /** Where the message was delivered, kept for audit. */
+  sentTo: text("sent_to"),
+  createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+}, (table) => [
+  uniqueIndex("care_follow_ups_appointment_kind_unique").on(table.appointmentId, table.kind),
+]);
+
+export type CareFollowUp = typeof careFollowUps.$inferSelect;
+export type CareFollowUpKind = CareFollowUp["kind"];
 
 export const notificationChannelEnum = pgEnum("notification_channel", ["email", "sms", "whatsapp"]);
 export const notificationStatusEnum = pgEnum("notification_status", [

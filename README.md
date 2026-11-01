@@ -13,7 +13,8 @@ appear in their dashboard instantly.
 - **Booking flow** — slot selection → optional reason → confirmation; bookings are re-validated server-side and backed by a partial unique index, so the same slot can never be double-booked
 - **Patient dashboard** — upcoming appointments, booking history, one-click cancel, notification preferences (email/SMS with consent)
 - **Doctor dashboard** — schedule of booked patients with contact details, daily counts, cancel support
-- **Notifications** — email (Resend) and SMS (Twilio) with a durable audit ledger, idempotent sends, exponential-backoff retries, 24h/1h appointment reminders, and per-patient consent-aware channel preferences. See [`docs/notifications.md`](docs/notifications.md)
+- **Notifications** — email (Resend) and mobile — WhatsApp preferred, SMS fallback — via Twilio, with a durable audit ledger, idempotent sends, exponential-backoff retries, 24h/1h appointment reminders, and per-patient consent-aware channel preferences. See [`docs/notifications.md`](docs/notifications.md)
+- **Post-visit care loop** — completing a visit can carry aftercare instructions (shown only on the patient's dashboard) and a recommended follow-up interval; Medrella thanks the patient after the visit and, when advised, nudges them to rebook. See [`docs/notifications.md`](docs/notifications.md)
 - **Seeded demo data** — 6 doctors across cardiology, dermatology, orthopedics, pediatrics, general medicine and neurology
 
 ## Tech stack

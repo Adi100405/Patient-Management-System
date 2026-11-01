@@ -4,9 +4,11 @@ import {
   appointmentCancelled,
   appointmentRescheduled,
   bookingConfirmed,
+  followUpPrompt,
   paymentConfirmed,
   refundUpdate,
   reminder,
+  visitThanks,
   type AppointmentMailContext,
   type MailContent,
 } from "./templates";
@@ -31,6 +33,19 @@ async function contextFor(appointmentId: number) {
 }
 
 type DeliveryReport = { email: NotifyResult | null; mobile: NotifyResult | null };
+
+/**
+ * Where a multi-channel send actually landed, for the sweep's ledger.
+ *
+ * Email is preferred as the record, but a patient who turned email off and kept
+ * mobile on was still reached — reporting null there would delete the sweep's
+ * claim and re-send the same mobile message on every run.
+ */
+export function deliveredTo(ctx: AppointmentMailContext, report: DeliveryReport): string | null {
+  if (report.email?.delivered) return ctx.patientEmail;
+  if (report.mobile?.delivered && ctx.patientPhone) return ctx.patientPhone;
+  return null;
+}
 
 async function deliver(
   ctx: AppointmentMailContext,
@@ -193,5 +208,43 @@ export async function sendAppointmentReminder(
     // each appointment+kind once, and it must stay possible to re-send after a
     // failed delivery (the notification ledger row is kept for audit only).
   });
-  return report.email?.delivered ? ctx.patientEmail : null;
+  return deliveredTo(ctx, report);
+}
+
+/**
+ * Post-visit thank-you, sent shortly after a completed visit. `hasAftercare`
+ * only decides whether the message points at the doctor's aftercare note; the
+ * note itself is never included.
+ */
+export async function sendVisitThanks(
+  appointmentId: number,
+  options: { hasAftercare: boolean },
+): Promise<string | null> {
+  const ctx = await contextFor(appointmentId);
+  if (!ctx) return null;
+  const content = visitThanks(ctx, options);
+  const report = await deliver(ctx, content, {
+    kind: "visit_thanks",
+    // No idempotency key: the `care_follow_ups` table owns dedup for this event.
+  });
+  return deliveredTo(ctx, report);
+}
+
+/**
+ * Follow-up prompt, sent once `days` have passed since a visit whose doctor
+ * recommended one. The calendar decision lives in the sweep; this only renders
+ * and delivers.
+ */
+export async function sendFollowUpPrompt(
+  appointmentId: number,
+  options: { days: number },
+): Promise<string | null> {
+  const ctx = await contextFor(appointmentId);
+  if (!ctx) return null;
+  const content = followUpPrompt(ctx, options);
+  const report = await deliver(ctx, content, {
+    kind: "follow_up_prompt",
+    // No idempotency key: the `care_follow_ups` table owns dedup for this event.
+  });
+  return deliveredTo(ctx, report);
 }
