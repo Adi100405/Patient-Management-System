@@ -2,6 +2,7 @@ import type { Metadata } from "next";
 import { Geist, Geist_Mono } from "next/font/google";
 import "./globals.css";
 import { SiteHeader } from "@/components/site-header";
+import { ToastProvider } from "@/components/ui/toast";
 
 const geistSans = Geist({ variable: "--font-geist-sans", subsets: ["latin"] });
 const geistMono = Geist_Mono({ variable: "--font-geist-mono", subsets: ["latin"] });
@@ -16,14 +17,16 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
   return (
     <html lang="en">
       <body className={`${geistSans.variable} ${geistMono.variable} font-sans`}>
-        <SiteHeader />
-        <main className="mx-auto w-full max-w-6xl px-4 py-8">{children}</main>
-        <footer className="mt-16 border-t border-cream-200 bg-white/60">
-          <div className="mx-auto flex max-w-6xl flex-col gap-1 px-4 py-6 text-sm text-ink-500 sm:flex-row sm:items-center sm:justify-between">
-            <p>© {new Date().getFullYear()} Medrella · Care, one appointment at a time</p>
-            <p className="text-ink-500/80">Patient Management System</p>
-          </div>
-        </footer>
+        <ToastProvider>
+          <SiteHeader />
+          <main className="mx-auto w-full max-w-6xl px-4 py-8">{children}</main>
+          <footer className="mt-16 border-t border-cream-200 bg-white/60">
+            <div className="mx-auto flex max-w-6xl flex-col gap-1 px-4 py-6 text-sm text-ink-500 sm:flex-row sm:items-center sm:justify-between">
+              <p>© {new Date().getFullYear()} Medrella · Care, one appointment at a time</p>
+              <p className="text-ink-500/80">Patient Management System</p>
+            </div>
+          </footer>
+        </ToastProvider>
       </body>
     </html>
   );

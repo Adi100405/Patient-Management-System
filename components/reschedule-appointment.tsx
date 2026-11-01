@@ -1,6 +1,7 @@
 "use client";
 
 import { useActionState, useState } from "react";
+import { AlertTriangle, Check } from "lucide-react";
 import { rescheduleAppointment, type RescheduleState } from "@/actions/booking";
 import { Button } from "@/components/ui/button";
 import { cn, formatDate, formatTime } from "@/lib/utils";
@@ -12,30 +13,6 @@ export type RescheduleDayOption = {
   /** Free slots for this doctor on this day, at the moment the page rendered. */
   times: string[];
 };
-
-function CheckIcon({ className }: { className?: string }) {
-  return (
-    <svg viewBox="0 0 20 20" fill="currentColor" aria-hidden="true" className={className}>
-      <path
-        fillRule="evenodd"
-        d="M16.7 5.3a1 1 0 0 1 0 1.4l-7.5 7.5a1 1 0 0 1-1.4 0L3.3 9.7a1 1 0 1 1 1.4-1.4l3.8 3.8 6.8-6.8a1 1 0 0 1 1.4 0Z"
-        clipRule="evenodd"
-      />
-    </svg>
-  );
-}
-
-function AlertIcon({ className }: { className?: string }) {
-  return (
-    <svg viewBox="0 0 20 20" fill="currentColor" aria-hidden="true" className={className}>
-      <path
-        fillRule="evenodd"
-        d="M10 18a8 8 0 1 0 0-16 8 8 0 0 0 0 16Zm0-11.5a.75.75 0 0 1 .75.75v3.5a.75.75 0 0 1-1.5 0v-3.5A.75.75 0 0 1 10 6.5Zm0 8a1 1 0 1 0 0-2 1 1 0 0 0 0 2Z"
-        clipRule="evenodd"
-      />
-    </svg>
-  );
-}
 
 /**
  * Inline "move my appointment" picker for the patient dashboard. Days and free
@@ -97,7 +74,7 @@ export function RescheduleAppointment({
           role="status"
           className="order-last flex w-full items-start gap-2.5 rounded-xl border border-teal-200 bg-teal-50 p-3.5 text-sm text-teal-900"
         >
-          <CheckIcon className="mt-0.5 h-4 w-4 shrink-0 text-teal-700" />
+          <Check className="mt-0.5 h-4 w-4 shrink-0 text-teal-700" />
           <div>
             <p className="font-medium">Your appointment has moved</p>
             <p className="text-teal-800">{state.message.replace(/^Rescheduled to /, "")}</p>
@@ -184,7 +161,7 @@ export function RescheduleAppointment({
                       : "border-cream-300 bg-white text-ink-800 hover:border-teal-400 hover:bg-teal-50/60",
                 )}
               >
-                {isSelected && <CheckIcon className="h-3.5 w-3.5" />}
+                {isSelected && <Check className="h-3.5 w-3.5" />}
                 {formatTime(time)}
                 {isCurrent && <span className="text-[9px] uppercase tracking-wide">current</span>}
               </button>
@@ -217,7 +194,7 @@ export function RescheduleAppointment({
           role="alert"
           className="flex items-start gap-2 rounded-xl border border-rose-200 bg-rose-50 p-3 text-xs text-rose-700"
         >
-          <AlertIcon className="mt-px h-3.5 w-3.5 shrink-0" />
+          <AlertTriangle className="mt-px h-3.5 w-3.5 shrink-0" />
           {state.error}
         </p>
       )}
