@@ -112,6 +112,33 @@ Add `?probe=1` only when you want the live Twilio lookup, and `?templates=1` to
 list the account's templates (sid, friendly name, WhatsApp-capable) when you
 need to find the right `HX…` value.
 
+Two more read-only views answer the questions a trial account cannot:
+
+- `?messages=1` — Twilio's own message log for this account. When a template
+  message is accepted, Twilio records the `ContentSid` it accepted, which is the
+  one reliable way to learn a template sid this account owns: a trial account
+  cannot read the Content API (`20003`), but it can read its message log.
+  Recipients are masked; message bodies are never returned.
+- `?services=1` — the account's messaging services.
+
+### Sending one message on demand
+
+`POST /api/notifications/test-send` (doctor-only) sends a single template
+WhatsApp through the deployment's own credentials and reports what Twilio
+answered — the message sid on success, or Twilio's error code on failure. The
+message carries only the visit date and visit time placeholders, never patient
+details. It exists so "can this deployment deliver?" is answerable without
+booking an appointment:
+
+```json
+{ "to": "+91XXXXXXXXXX", "from": "+14155238886" }
+```
+
+`from` is optional and defaults to the configured sender. On a trial account a
+template can be valid only from a particular sender — the Sandbox number, for
+instance — so overriding it lets an operator compare senders without a
+redeploy.
+
 A common false negative: env vars added in Vercel after a build do not reach
 that build. Check the returned `deployment.commit` is the commit you expect,
 then trigger a **new** deployment (a merge to `main` or Deployments → Redeploy)
