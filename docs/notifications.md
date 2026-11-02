@@ -60,37 +60,44 @@ Setup:
 3. Add the env vars in Vercel (Project → Settings → Environment Variables) and
    redeploy.
 
-### Mobile — WhatsApp (preferred) and SMS via Twilio
+### Mobile — templated WhatsApp and SMS via Twilio
 
-One Twilio account carries both. **WhatsApp wins the mobile channel whenever it
-is configured**; otherwise the same short message goes by SMS. One transport per
-event either way, so a patient never gets both.
+One Twilio account carries both. **WhatsApp is template-only**: every send on
+that network carries an approved Content Template's `ContentSid` plus its
+`ContentVariables`, never a free-form `Body` — WhatsApp rejects
+business-initiated free-form text whenever the recipient's 24-hour window is
+closed. The kinds the clinic's one appointment template can say (booking
+confirmed, rescheduled, 24h/1h reminders) go through WhatsApp when it is fully
+configured; payment, refund, cancellation and care messages have no template
+and ride SMS. One transport per event either way, so a patient never gets both.
 
 | Env var | Required | Notes |
 |---|---|---|
 | `TWILIO_ACCOUNT_SID` | for WhatsApp or SMS | From the Twilio console. |
 | `TWILIO_AUTH_TOKEN` | for WhatsApp or SMS | Paired auth token. |
-| `TWILIO_WHATSAPP_FROM` | to enable WhatsApp | Set it to turn the mobile channel into WhatsApp; `+14155238886` is the free sandbox. Left unset, mobile messages stay SMS. |
-| `TWILIO_FROM` | for SMS | An SMS-capable number or messaging service, E.164. |
+| `TWILIO_WHATSAPP_FROM` | for WhatsApp | The WhatsApp sender, E.164 (the free trial auto-assigns one; production uses a registered sender). |
+| `TWILIO_WHATSAPP_CONTENT_SID` | for WhatsApp | The approved Content Template sid, `HX` + 32 hex chars — anything else is treated as unconfigured. The template must use `{{1}}` for the visit date and `{{2}}` for the visit time. |
+| `TWILIO_FROM` | for SMS | An SMS-capable number or messaging service, E.164. Carries every kind without a WhatsApp template. |
 
-WhatsApp sandbox — free, no business verification:
+WhatsApp setup (console → **Messaging → Try it out → Send a WhatsApp message**):
 
-1. In the Twilio console open **Messaging → Try it out → Send a WhatsApp message**.
-2. From the patient's phone, send the displayed `join <keyword>` to
-   `+14155238886`. Until a number joins, Twilio rejects messages to it.
-3. Set `TWILIO_ACCOUNT_SID`, `TWILIO_AUTH_TOKEN` and
-   `TWILIO_WHATSAPP_FROM="+14155238886"`, then redeploy. WhatsApp becomes the
-   mobile channel the moment that sender is configured.
+1. Verify the recipient's number (trial accounts may only message verified
+   numbers) and copy the `HX…` Content sid Twilio shows in the API snippet.
+2. Set `TWILIO_ACCOUNT_SID`, `TWILIO_AUTH_TOKEN`, `TWILIO_WHATSAPP_FROM`
+   (the trial's WhatsApp sender) and `TWILIO_WHATSAPP_CONTENT_SID`, then
+   redeploy.
+3. The template-bearing kinds now go through WhatsApp; a recipient who was
+   never verified is rejected by Twilio and the ledger records why.
 
-Limits worth knowing: the sandbox is a development tool, and WhatsApp accepts
-free-form text only inside the 24-hour window opened by the recipient's last
-message (`join` opens it). Outside that window Twilio rejects the send and the
-ledger records the reason — nothing is reported as delivered. Production needs
-an approved WhatsApp sender and pre-approved message templates.
+Limits worth knowing: on a trial account only the pre-approved sample
+templates are sendable, and Twilio rejects free-form business-initiated sends
+with error `21654 ContentSid Required`. A missing or malformed template sid
+counts as "WhatsApp not configured" and the mobile message rides SMS — never
+faked: every attempt is recorded on the ledger with its reason.
 
 SMS: set `TWILIO_FROM` as well. Indian numbers additionally require TRAI **DLT**
 registration (entity, sender ID, templates), which no provider can skip. Missing
-WhatsApp/SMS configuration means the attempt is recorded as not delivered, never
+SMS configuration means the attempt is recorded as not delivered, never
 faked by a fallback.
 
 Every transport uses plain `fetch` with an 8-second timeout, so a hung provider

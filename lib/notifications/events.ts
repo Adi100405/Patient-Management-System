@@ -55,9 +55,12 @@ async function deliver(
   const prefs = await preferencesForUser(ctx.patientUserId);
   const plan = channelsFor(prefs, { phone: ctx.patientPhone });
 
-  // One transport carries the short message: WhatsApp once configured, else
-  // SMS. The patient consented to "mobile updates", not to a specific network.
-  const mobile = mobileChannelName();
+  // One transport carries the short message. The kinds the clinic's approved
+  // appointment template can say (booked, moved, reminder) go on WhatsApp when
+  // it is fully configured; payment, refund, cancellation and care messages
+  // have no template and ride SMS. The same consent either way: the patient
+  // opted into "mobile updates", not a specific network.
+  const mobile = content.whatsapp ? mobileChannelName() : "sms";
 
   // Per-channel idempotency keys: one ledger row per channel, so a duplicate
   // event can never double-send on either transport.
@@ -83,6 +86,7 @@ async function deliver(
             to: ctx.patientPhone ?? "",
             subject: "",
             text: content.sms,
+            contentVariables: content.whatsapp ?? null,
             meta: { kind: options.kind },
           },
           { channel: mobile, idempotencyKey: mobileKey },

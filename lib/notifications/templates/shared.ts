@@ -37,7 +37,27 @@ export type AppointmentMailContext = {
  * none of the renderings may quote the patient's free-text reason, which is
  * medical content and does not belong in an inbox or a phone's message list.
  */
-export type MailContent = { subject: string; text: string; html: string; sms?: string };
+export type MailContent = {
+  subject: string;
+  text: string;
+  html: string;
+  sms?: string;
+  /**
+   * Twilio Content Template variables ({"1", "2"}) for the WhatsApp send, set
+   * only by the kinds the clinic's one approved appointment template can say
+   * (booked, moved, reminder). Every other kind leaves it unset so the event
+   * layer routes its mobile message to SMS instead of forcing it through a
+   * template that cannot carry it.
+   */
+  whatsapp?: Record<string, string>;
+};
+
+/** The two placeholders the clinic's approved WhatsApp appointment template
+ * understands: {{1}} the visit date, {{2}} the visit time. They travel
+ * verbatim into Twilio's `ContentVariables`, keyed by position. */
+export function whatsappWhen(ctx: AppointmentMailContext): Record<string, string> {
+  return { "1": formatDate(ctx.date), "2": formatTime(ctx.time) };
+}
 
 export function greeting(ctx: AppointmentMailContext) {
   return `Hi ${ctx.patientName},`;

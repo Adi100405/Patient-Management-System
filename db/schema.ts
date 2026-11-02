@@ -3,6 +3,7 @@ import {
   boolean,
   index,
   integer,
+  jsonb,
   numeric,
   pgEnum,
   pgTable,
@@ -307,6 +308,12 @@ export const notifications = pgTable("notifications", {
    * silently downgrade to plain text.
    */
   htmlBody: text("html_body"),
+  /**
+   * Twilio Content Variables ({"1": …, "2": …}) for the templated WhatsApp
+   * send, stored like htmlBody so the retry sweep re-sends exactly what a
+   * first attempt carried. Null for SMS, email and any non-templated message.
+   */
+  contentVariables: jsonb("content_variables").$type<Record<string, string>>(),
   status: notificationStatusEnum("status").notNull().default("queued"),
   /** Number of delivery attempts made so far. */
   attempts: integer("attempts").notNull().default(0),

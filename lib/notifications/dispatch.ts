@@ -45,6 +45,7 @@ async function sendRecord(
       subject: record.subject ?? "",
       text: record.body,
       html: record.htmlBody,
+      contentVariables: record.contentVariables,
       meta: { kind: record.kind },
     });
 
@@ -87,6 +88,9 @@ export async function dispatchNotification(
       subject: meta.channel === "email" ? message.subject : null,
       body: message.text,
       htmlBody: meta.channel === "email" ? (message.html ?? null) : null,
+      // Only the templated transport re-uses its variables on a retry; SMS
+      // carries free-form text from this same body field.
+      contentVariables: meta.channel === "whatsapp" ? (message.contentVariables ?? null) : null,
       idempotencyKey: meta.idempotencyKey ?? null,
     },
     now,

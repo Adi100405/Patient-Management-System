@@ -38,6 +38,7 @@ class MemoryStore implements NotificationStore {
       subject: draft.subject,
       body: draft.body,
       htmlBody: draft.htmlBody,
+      contentVariables: draft.contentVariables ?? null,
       status: "queued",
       attempts: 1,
       idempotencyKey: draft.idempotencyKey,
@@ -212,6 +213,39 @@ describe("retryDueNotifications", () => {
 
     const retried = send.mock.calls.at(1)?.at(0);
     expect(retried?.html).toBe(rich.html);
+  });
+
+  it("carries the Content Template variables across a retry so a templated WhatsApp send re-sends identically", async () => {
+    const store = new MemoryStore();
+    const send = vi
+      .fn<NotificationChannel["send"]>()
+      .mockRejectedValueOnce(new Error("provider down"))
+      .mockResolvedValueOnce({});
+    const templated: NotificationMessage = {
+      ...message,
+      contentVariables: { "1": "5 Nov 2026", "2": "10:30" },
+    };
+
+    await dispatchNotification(
+      templated,
+      {
+        kind: "booking_confirmed",
+        channel: "whatsapp",
+        idempotencyKey: "booking_confirmed:42:whatsapp",
+      },
+      { store, channel: channel(send), now: t0 },
+    );
+    // The ledger keeps the template's variables, not just the fallback text.
+    expect(store.rows[0]?.contentVariables).toEqual({ "1": "5 Nov 2026", "2": "10:30" });
+
+    await retryDueNotifications({
+      store,
+      resolveChannel: () => channel(send),
+      now: new Date(t0.getTime() + backoffFor(1) + 1_000),
+    });
+
+    const retried = send.mock.calls.at(1)?.at(0);
+    expect(retried?.contentVariables).toEqual({ "1": "5 Nov 2026", "2": "10:30" });
   });
 
   it("stops retrying once the attempt cap is reached", async () => {

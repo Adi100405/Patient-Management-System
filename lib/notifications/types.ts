@@ -22,6 +22,13 @@ export type NotificationMessage = {
    * plain text. Absent for SMS and for any text-only send.
    */
   html?: string | null;
+  /**
+   * Substitution values for a templated send, keyed by placeholder position:
+   * { "1": "5 Nov 2026", "2": "10:30" }. WhatsApp is template-only — a send on
+   * that network carries these and never a free-form body, and a template
+   * channel must reject a message without them rather than improvise text.
+   */
+  contentVariables?: Record<string, string> | null;
   /** Free-form labels stored alongside the send for debugging and audit. */
   meta?: Record<string, string>;
 };
