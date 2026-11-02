@@ -2,6 +2,7 @@ import { logChannel } from "./channels/log";
 import { createResendChannel } from "./channels/resend";
 import { createTwilioChannel, createTwilioWhatsAppChannel } from "./channels/twilio";
 import { dispatchNotification, retryDueNotifications } from "./dispatch";
+import { loadWhatsappSettings } from "./settings";
 import { dbNotificationStore, type NotificationStore } from "./store";
 import type {
   NotificationChannel,
@@ -86,6 +87,10 @@ export async function notify(
   message: NotificationMessage,
   options?: NotifyOptions,
 ): Promise<NotifyResult> {
+  // The WhatsApp template can be pointed at another sid from the database, so
+  // the configuration is refreshed before a transport is chosen.
+  await loadWhatsappSettings();
+
   const channelName = options?.channel ?? "email";
   const channel = channelFor(channelName);
 
@@ -138,6 +143,7 @@ export async function retryFailedNotifications(options?: {
   now?: Date;
 }): Promise<{ retried: number; sent: number }> {
   try {
+    await loadWhatsappSettings({ force: true });
     return await retryDueNotifications(
       {
         store: dbNotificationStore,

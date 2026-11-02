@@ -4,6 +4,7 @@ import {
   createTwilioChannel,
   createTwilioWhatsAppChannel,
   normalizeContentSid,
+  whatsappConfig,
   whatsappStatus,
 } from "@/lib/notifications/channels/twilio";
 import type { FetchLike } from "@/lib/notifications/channels/twilio";
@@ -227,7 +228,7 @@ describe("WhatsApp configuration status", () => {
     expect(whatsappStatus({})).toEqual({
       credentials: false,
       sender: false,
-      contentSid: { present: false, valid: false, tail: null },
+      contentSid: { present: false, valid: false, tail: null, source: null },
       configured: false,
     });
 
@@ -240,7 +241,7 @@ describe("WhatsApp configuration status", () => {
     expect(ready).toEqual({
       credentials: true,
       sender: true,
-      contentSid: { present: true, valid: true, tail: UPPERCASE_SID.slice(-4) },
+      contentSid: { present: true, valid: true, tail: UPPERCASE_SID.slice(-4), source: "env" },
       configured: true,
     });
     expect(JSON.stringify(ready)).not.toContain(UPPERCASE_SID);
@@ -251,8 +252,51 @@ describe("WhatsApp configuration status", () => {
       TWILIO_WHATSAPP_FROM: "+14155238886",
       TWILIO_WHATSAPP_CONTENT_SID: "ACnot-a-template-sid",
     });
-    expect(malformed.contentSid).toEqual({ present: true, valid: false, tail: null });
+    expect(malformed.contentSid).toEqual({
+      present: true,
+      valid: false,
+      tail: null,
+      source: null,
+    });
     expect(malformed.configured).toBe(false);
+  });
+});
+
+describe("runtime WhatsApp configuration", () => {
+  const env = {
+    TWILIO_ACCOUNT_SID: "ACtest123",
+    TWILIO_AUTH_TOKEN: "authtoken",
+    TWILIO_WHATSAPP_FROM: "+17372508034",
+    TWILIO_WHATSAPP_CONTENT_SID: CONTENT_SID,
+  };
+
+  it("falls back to the environment when nothing is stored", () => {
+    const config = whatsappConfig(env, { contentSid: null, sender: null });
+    expect(config.contentSid).toBe(CONTENT_SID);
+    expect(config.contentSidSource).toBe("env");
+    expect(config.sender).toBe("+17372508034");
+  });
+
+  it("lets an operator point the app at another template", () => {
+    const config = whatsappConfig(env, { contentSid: UPPERCASE_SID, sender: null });
+    expect(config.contentSid).toBe(UPPERCASE_SID);
+    expect(config.contentSidSource).toBe("runtime");
+  });
+
+  it("ignores a stored value that is not a template sid", () => {
+    const config = whatsappConfig(env, { contentSid: "nonsense", sender: null });
+    expect(config.contentSid).toBe(CONTENT_SID);
+    expect(config.contentSidSource).toBe("env");
+  });
+
+  it("uses a stored sender only when the environment has none", () => {
+    const withoutSender = { ...env, TWILIO_WHATSAPP_FROM: undefined };
+    expect(whatsappConfig(withoutSender, { contentSid: null, sender: "+14155238886" }).sender).toBe(
+      "+14155238886",
+    );
+    expect(whatsappConfig(env, { contentSid: null, sender: "+14155238886" }).sender).toBe(
+      "+17372508034",
+    );
   });
 });
 
