@@ -89,6 +89,34 @@ WhatsApp setup (console → **Messaging → Try it out → Send a WhatsApp messa
 3. The template-bearing kinds now go through WhatsApp; a recipient who was
    never verified is rejected by Twilio and the ledger records why.
 
+The sid is read forgivingly: surrounding whitespace, matching quotes, a
+`ContentSid=` prefix and uppercase hex are all accepted, because those are the
+shapes a copy from the console's API snippet can take. Anything else counts as
+unconfigured.
+
+### Verifying what a deployment can see
+
+"Mobile skipped" does not say whether the provider was unconfigured or the env
+var never reached the build. Sign in to a **doctor** account and open:
+
+```
+GET /api/notifications/status?probe=1
+```
+
+It answers with the deployment's environment, branch and commit; which
+transports are configured; whether the Content sid is present, well-formed and
+(thanks to `probe=1`) actually visible to this Twilio account, by friendly name;
+and which channel the next mobile message will use. Only booleans and the last
+four characters of the sid are returned — credentials never leave the server.
+Add `?probe=1` only when you want the live Twilio lookup, and `?templates=1` to
+list the account's templates (sid, friendly name, WhatsApp-capable) when you
+need to find the right `HX…` value.
+
+A common false negative: env vars added in Vercel after a build do not reach
+that build. Check the returned `deployment.commit` is the commit you expect,
+then trigger a **new** deployment (a merge to `main` or Deployments → Redeploy)
+and re-check.
+
 Limits worth knowing: on a trial account only the pre-approved sample
 templates are sendable, and Twilio rejects free-form business-initiated sends
 with error `21654 ContentSid Required`. A missing or malformed template sid

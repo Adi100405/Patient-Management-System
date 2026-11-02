@@ -3,6 +3,8 @@ import type { Mock } from "vitest";
 import {
   createTwilioChannel,
   createTwilioWhatsAppChannel,
+  normalizeContentSid,
+  whatsappStatus,
 } from "@/lib/notifications/channels/twilio";
 import type { FetchLike } from "@/lib/notifications/channels/twilio";
 import { mobileChannelName } from "@/lib/notifications";
@@ -16,6 +18,8 @@ const message: NotificationMessage = {
 
 /** HX… + 32 hex digits — the shape Twilio issues for Content Templates. */
 const CONTENT_SID = "HX" + "0123456789abcdef".repeat(2);
+/** Twilio's documented pattern accepts uppercase hex too. */
+const UPPERCASE_SID = "HX" + "0123456789ABCDEF".repeat(2);
 /** The approved template's two placeholders: {{1}} visit date, {{2}} visit time. */
 const whatsappVars = { "1": "5 Nov 2026", "2": "10:30" };
 
@@ -174,6 +178,81 @@ describe("Twilio mobile transports", () => {
         whatsappChannel(fetchImpl).send({ ...message, contentVariables: whatsappVars }),
       ).rejects.toThrow("Twilio rejected the WhatsApp (400)");
     });
+
+    it("accepts an uppercase sid pasted straight from the console snippet", async () => {
+      process.env.TWILIO_ACCOUNT_SID = "ACtest123";
+      process.env.TWILIO_AUTH_TOKEN = "authtoken";
+      process.env.TWILIO_WHATSAPP_FROM = "+14155238886";
+      // What a copy from the API sample can look like: the parameter name,
+      // quotes, surrounding whitespace and uppercase hex.
+      process.env.TWILIO_WHATSAPP_CONTENT_SID = `  ContentSid="${UPPERCASE_SID}"\n`;
+      const fetchImpl = vi.fn<FetchLike>().mockResolvedValue(jsonResponse(201, { sid: "SM789" }));
+
+      const channel = createTwilioWhatsAppChannel({ fetchImpl });
+      if (!channel) throw new Error("uppercase hex must be accepted");
+
+      await channel.send({ ...message, contentVariables: whatsappVars });
+
+      expect(sentParams(fetchImpl).get("ContentSid")).toBe(UPPERCASE_SID);
+    });
+  });
+});
+
+describe("Content Template sid parsing", () => {
+  it("accepts the raw value plus the shapes a console copy produces", () => {
+    expect(normalizeContentSid(CONTENT_SID)).toBe(CONTENT_SID);
+    expect(normalizeContentSid(`  ${CONTENT_SID}\n`)).toBe(CONTENT_SID);
+    expect(normalizeContentSid(`"${CONTENT_SID}"`)).toBe(CONTENT_SID);
+    expect(normalizeContentSid(`'${CONTENT_SID}'`)).toBe(CONTENT_SID);
+    expect(normalizeContentSid(`ContentSid=${CONTENT_SID}`)).toBe(CONTENT_SID);
+    expect(normalizeContentSid(`ContentSid="${CONTENT_SID}"`)).toBe(CONTENT_SID);
+    // Twilio documents the sid as hex, and hex case is not significant.
+    expect(normalizeContentSid(UPPERCASE_SID)).toBe(UPPERCASE_SID);
+  });
+
+  it("rejects anything that is not a Content Template sid", () => {
+    expect(normalizeContentSid(undefined)).toBeNull();
+    expect(normalizeContentSid("")).toBeNull();
+    expect(normalizeContentSid("   ")).toBeNull();
+    // An Account sid or a Messaging Service sid is not a template.
+    expect(normalizeContentSid("AC" + "0".repeat(32))).toBeNull();
+    expect(normalizeContentSid("MG" + "0".repeat(32))).toBeNull();
+    expect(normalizeContentSid("HX123")).toBeNull();
+    expect(normalizeContentSid(CONTENT_SID + "0")).toBeNull();
+  });
+});
+
+describe("WhatsApp configuration status", () => {
+  it("reports each missing piece and never echoes the whole sid", () => {
+    expect(whatsappStatus({})).toEqual({
+      credentials: false,
+      sender: false,
+      contentSid: { present: false, valid: false, tail: null },
+      configured: false,
+    });
+
+    const ready = whatsappStatus({
+      TWILIO_ACCOUNT_SID: "ACtest123",
+      TWILIO_AUTH_TOKEN: "authtoken",
+      TWILIO_WHATSAPP_FROM: "+14155238886",
+      TWILIO_WHATSAPP_CONTENT_SID: ` ${UPPERCASE_SID} `,
+    });
+    expect(ready).toEqual({
+      credentials: true,
+      sender: true,
+      contentSid: { present: true, valid: true, tail: UPPERCASE_SID.slice(-4) },
+      configured: true,
+    });
+    expect(JSON.stringify(ready)).not.toContain(UPPERCASE_SID);
+
+    const malformed = whatsappStatus({
+      TWILIO_ACCOUNT_SID: "ACtest123",
+      TWILIO_AUTH_TOKEN: "authtoken",
+      TWILIO_WHATSAPP_FROM: "+14155238886",
+      TWILIO_WHATSAPP_CONTENT_SID: "ACnot-a-template-sid",
+    });
+    expect(malformed.contentSid).toEqual({ present: true, valid: false, tail: null });
+    expect(malformed.configured).toBe(false);
   });
 });
 

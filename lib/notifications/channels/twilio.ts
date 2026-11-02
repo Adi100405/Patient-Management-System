@@ -32,7 +32,68 @@ type FetchLike = (input: string, init?: RequestInit) => Promise<Response>;
 const LABEL: Record<TwilioKind, string> = { sms: "SMS", whatsapp: "WhatsApp" };
 
 /** Content Template sids look like `HX` followed by 32 hex digits. */
-const CONTENT_SID_PATTERN = /^HX[0-9a-f]{32}$/;
+const CONTENT_SID_PATTERN = /^HX[0-9a-f]{32}$/i;
+
+/**
+ * Accepts a Content Template sid the way it actually arrives from the Twilio
+ * console: trimmed, optionally wrapped in quotes, and — because the console's
+ * API snippet is the obvious place to copy from — optionally prefixed with
+ * `ContentSid=`. Twilio's own pattern (`^HX[0-9a-fA-F]{32}$`) treats hex case
+ * as insignificant, so this does too. Anything else stays `null`: a malformed
+ * sid counts as "WhatsApp not configured" rather than being sent to Twilio.
+ */
+export function normalizeContentSid(raw: string | undefined): string | null {
+  if (!raw) return null;
+
+  let value = raw.trim();
+  const unquote = (input: string) => {
+    const first = input[0];
+    const last = input[input.length - 1];
+    return input.length >= 2 &&
+      ((first === '"' && last === '"') || (first === "'" && last === "'"))
+      ? input.slice(1, -1).trim()
+      : input;
+  };
+
+  value = unquote(value);
+  value = value.replace(/^contentsid\s*=\s*/i, "");
+  value = unquote(value.trim());
+
+  return CONTENT_SID_PATTERN.test(value) ? value : null;
+}
+
+/** What the deployment can see of the WhatsApp setup, without any secrets. */
+export type WhatsappStatus = {
+  credentials: boolean;
+  sender: boolean;
+  contentSid: {
+    present: boolean;
+    valid: boolean;
+    /** Last four characters only, enough to compare two environments. */
+    tail: string | null;
+  };
+  configured: boolean;
+};
+
+export function whatsappStatus(
+  env: Record<string, string | undefined> = process.env,
+): WhatsappStatus {
+  const rawSid = env.TWILIO_WHATSAPP_CONTENT_SID;
+  const contentSid = normalizeContentSid(rawSid);
+  const credentials = Boolean(env.TWILIO_ACCOUNT_SID && env.TWILIO_AUTH_TOKEN);
+  const sender = Boolean(env.TWILIO_WHATSAPP_FROM);
+
+  return {
+    credentials,
+    sender,
+    contentSid: {
+      present: Boolean(rawSid && rawSid.trim()),
+      valid: contentSid !== null,
+      tail: contentSid ? contentSid.slice(-4) : null,
+    },
+    configured: credentials && sender && contentSid !== null,
+  };
+}
 
 const apiRoot = (accountSid: string) =>
   `https://api.twilio.com/2010-04-01/Accounts/${accountSid}/Messages.json`;
@@ -51,15 +112,27 @@ function createTwilioTransport(
   const authToken = process.env.TWILIO_AUTH_TOKEN;
   const fromNumber =
     kind === "whatsapp" ? process.env.TWILIO_WHATSAPP_FROM : process.env.TWILIO_FROM;
-  const contentSid = process.env.TWILIO_WHATSAPP_CONTENT_SID;
+  const contentSid = normalizeContentSid(process.env.TWILIO_WHATSAPP_CONTENT_SID);
 
   // A malformed template sid is treated as unconfigured rather than trusted:
   // Twilio would reject every send and the ledger would fill with noise.
-  const templateSid =
-    contentSid && CONTENT_SID_PATTERN.test(contentSid) ? contentSid : null;
+  if (kind === "whatsapp") {
+    const status = whatsappStatus();
+    if (!status.configured) {
+      const missing = [
+        !status.credentials && "Twilio credentials",
+        !status.sender && "TWILIO_WHATSAPP_FROM",
+        !status.contentSid.present && "TWILIO_WHATSAPP_CONTENT_SID",
+        status.contentSid.present && !status.contentSid.valid && "a valid HX… Content sid",
+      ].filter(Boolean);
+      console.warn(`[notification] WhatsApp disabled — check ${missing.join(", ")}.`);
+      return null;
+    }
+  }
 
-  if (!accountSid || !authToken || !fromNumber) return null;
-  if (kind === "whatsapp" && !templateSid) return null;
+  if (!accountSid || !authToken || !fromNumber) {
+    return null;
+  }
 
   const prefix = kind === "whatsapp" ? "whatsapp:" : "";
   const from = `${prefix}${normalizeE164(fromNumber)}`;
@@ -89,7 +162,7 @@ function createTwilioTransport(
       // only repeats what the clinic's approved template can say.
       if (kind === "sms") {
         params.set("Body", message.text);
-      } else if (!templateSid) {
+      } else if (!contentSid) {
         throw new Error(
           "Twilio WhatsApp requires an approved Content Template (ContentSid); none is configured.",
         );
@@ -98,7 +171,7 @@ function createTwilioTransport(
           "Twilio WhatsApp is template-only: this message has no Content Template variables, so it should ride SMS instead of WhatsApp.",
         );
       } else {
-        params.set("ContentSid", templateSid);
+        params.set("ContentSid", contentSid);
         params.set("ContentVariables", JSON.stringify(message.contentVariables));
       }
 
