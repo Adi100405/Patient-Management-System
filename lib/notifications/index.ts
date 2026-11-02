@@ -45,10 +45,11 @@ function channelFor(name: NotificationChannelName): NotificationChannel | null {
 /**
  * Which transport carries the patient's short "mobile" message.
  *
- * WhatsApp wins whenever it is configured: same Twilio account and same single
- * short message per event, but a message patients actually read. Without
- * WhatsApp credentials this stays SMS — which is itself skipped while SMS is
- * unconfigured, never faked.
+ * WhatsApp is chosen only when it is fully configured: a sender AND the
+ * approved Content Template (`TWILIO_WHATSAPP_CONTENT_SID`), because
+ * business-initiated WhatsApp is template-only — free-form sends are rejected
+ * whenever the recipient's 24-hour window is closed. Without both this stays
+ * SMS, which is itself skipped while unconfigured, never faked.
  */
 export function mobileChannelName(): NotificationChannelName {
   return createTwilioWhatsAppChannel() ? "whatsapp" : "sms";
