@@ -138,6 +138,149 @@ async function listTemplates(): Promise<TemplateList> {
   }
 }
 
+type RecentMessage = {
+  sid: string;
+  /** Masked: the operator needs the direction, not the patient's number. */
+  from: string | null;
+  to: string | null;
+  direction: string | null;
+  status: string | null;
+  errorCode: number | null;
+  /** The template Twilio accepted for this message, when one was used. */
+  contentSid: string | null;
+  dateCreated: string | null;
+};
+
+type MessageList =
+  | { ok: true; messages: RecentMessage[] }
+  | { ok: false; status?: number; error: string };
+
+type ServiceList =
+  | {
+      ok: true;
+      services: Array<{ sid: string; friendlyName: string | null }>;
+    }
+  | { ok: false; status?: number; error: string };
+
+/** Keep the channel prefix and the last four digits; hide the rest. */
+function maskNumber(value: string | null | undefined): string | null {
+  if (!value) return null;
+  const prefix = value.startsWith("whatsapp:") ? "whatsapp:" : "";
+  const digits = value.slice(prefix.length);
+  if (digits.length <= 4) return `${prefix}${"*".repeat(digits.length)}`;
+  return `${prefix}${"*".repeat(digits.length - 4)}${digits.slice(-4)}`;
+}
+
+/**
+ * Twilio's own message log. When the app sends a template, Twilio records the
+ * `ContentSid` it accepted on that message — which is the one reliable way to
+ * learn a template sid this account owns without the Content API (a trial
+ * account cannot read that API).
+ */
+async function listRecentMessages(): Promise<MessageList> {
+  const authorization = twilioAuthHeader();
+  const accountSid = process.env.TWILIO_ACCOUNT_SID;
+  if (!authorization || !accountSid) {
+    return { ok: false, error: "Twilio credentials are not configured." };
+  }
+
+  try {
+    const response = await fetch(
+      `https://api.twilio.com/2010-04-01/Accounts/${accountSid}/Messages.json?PageSize=50`,
+      {
+        headers: { Authorization: authorization },
+        signal: AbortSignal.timeout(8_000),
+        cache: "no-store",
+      },
+    );
+    const body = await response.text();
+
+    if (!response.ok) {
+      return { ok: false, status: response.status, error: body.slice(0, 300) };
+    }
+
+    const payload = JSON.parse(body) as {
+      messages?: Array<{
+        sid?: string;
+        from?: string | null;
+        to?: string | null;
+        direction?: string | null;
+        status?: string | null;
+        error_code?: number | null;
+        content_sid?: string | null;
+        contentSid?: string | null;
+        date_created?: string | null;
+      }>;
+    };
+
+    return {
+      ok: true,
+      messages: (payload.messages ?? []).flatMap((message) => {
+        if (!message.sid) return [];
+        return [
+          {
+            sid: message.sid,
+            from: maskNumber(message.from),
+            to: maskNumber(message.to),
+            direction: message.direction ?? null,
+            status: message.status ?? null,
+            errorCode: message.error_code ?? null,
+            contentSid: message.content_sid ?? message.contentSid ?? null,
+            dateCreated: message.date_created ?? null,
+          },
+        ];
+      }),
+    };
+  } catch (error) {
+    return {
+      ok: false,
+      error: error instanceof Error ? error.message : "Twilio message log failed.",
+    };
+  }
+}
+
+/** Messaging services on the account — a template send may need one. */
+async function listServices(): Promise<ServiceList> {
+  const authorization = twilioAuthHeader();
+  if (!authorization) {
+    return { ok: false, error: "Twilio credentials are not configured." };
+  }
+
+  try {
+    const response = await fetch(
+      "https://messaging.twilio.com/v1/Services?PageSize=20",
+      {
+        headers: { Authorization: authorization },
+        signal: AbortSignal.timeout(8_000),
+        cache: "no-store",
+      },
+    );
+    const body = await response.text();
+
+    if (!response.ok) {
+      return { ok: false, status: response.status, error: body.slice(0, 300) };
+    }
+
+    const payload = JSON.parse(body) as {
+      services?: Array<{ sid?: string; friendly_name?: string | null }>;
+    };
+
+    return {
+      ok: true,
+      services: (payload.services ?? []).flatMap((service) =>
+        service.sid
+          ? [{ sid: service.sid, friendlyName: service.friendly_name ?? null }]
+          : [],
+      ),
+    };
+  } catch (error) {
+    return {
+      ok: false,
+      error: error instanceof Error ? error.message : "Twilio service list failed.",
+    };
+  }
+}
+
 export async function GET(request: Request) {
   const session = await getSession();
   if (!session || session.role !== "doctor") {
@@ -148,6 +291,8 @@ export async function GET(request: Request) {
   const params = new URL(request.url).searchParams;
   const probeRequested = params.get("probe") === "1";
   const templatesRequested = params.get("templates") === "1";
+  const messagesRequested = params.get("messages") === "1";
+  const servicesRequested = params.get("services") === "1";
   const sid = normalizeContentSid(process.env.TWILIO_WHATSAPP_CONTENT_SID);
 
   return NextResponse.json(
@@ -170,6 +315,8 @@ export async function GET(request: Request) {
             ? { ok: false, error: "No valid Content Template sid is configured." }
             : null,
       templates: templatesRequested ? await listTemplates() : null,
+      messages: messagesRequested ? await listRecentMessages() : null,
+      services: servicesRequested ? await listServices() : null,
     },
     { headers: { "cache-control": "no-store" } },
   );
