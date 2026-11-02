@@ -139,6 +139,46 @@ template can be valid only from a particular sender — the Sandbox number, for
 instance — so overriding it lets an operator compare senders without a
 redeploy.
 
+`contentSid` may also be passed for a single send: it is tried without being
+stored, so a sid copied from the Twilio console can be checked before it is
+activated.
+
+### Pointing the app at a template without a redeploy
+
+The Twilio credentials stay in the environment. The *Content Template sid* does
+not have to: it is an identifier, not a secret, and it changes whenever a
+template is approved, replaced or re-created. The doctor-only endpoint below
+stores it in the database, and the transport reads it on the next send — so
+fixing a template no longer waits for a deployment.
+
+```
+GET  /api/notifications/settings   → the effective configuration
+POST /api/notifications/settings   → { "contentSid": "HX…", "sender": "+1415…" }
+```
+
+An empty `contentSid` clears the override and hands control back to the
+environment. The sid is validated before it is stored: anything that is not
+`HX` plus 32 hex characters is refused.
+
+### When the account cannot create templates
+
+A trial Twilio account cannot read the Content API (`20003`), and it may not
+be able to create templates either. Rather than guess, this endpoint asks
+Twilio and reports the answer:
+
+```
+GET  /api/notifications/template   → which template APIs the account can read
+POST /api/notifications/template   → create the appointment template
+```
+
+`POST` asks Twilio for a template whose body is
+`Your appointment is coming up on {{1}} at {{2}}.` — the same two placeholders
+the app fills in, and nothing else. When Twilio accepts it, the new sid is
+stored as the active template immediately. When Twilio refuses, the refusal is
+returned verbatim: on a trial account the usual answer is `20003 This feature
+is not available on a Trial account`, which means the template has to come
+from the **Try it out → Send a WhatsApp message** page in the console.
+
 A common false negative: env vars added in Vercel after a build do not reach
 that build. Check the returned `deployment.commit` is the commit you expect,
 then trigger a **new** deployment (a merge to `main` or Deployments → Redeploy)

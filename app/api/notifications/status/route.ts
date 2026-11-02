@@ -4,6 +4,7 @@ import {
   normalizeContentSid,
   whatsappStatus,
 } from "@/lib/notifications/channels/twilio";
+import { loadWhatsappSettings } from "@/lib/notifications/settings";
 import { getSession } from "@/lib/session";
 
 /**
@@ -287,7 +288,7 @@ export async function GET(request: Request) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
 
-  const whatsapp = whatsappStatus();
+  const whatsapp = whatsappStatus(process.env, await loadWhatsappSettings({ force: true }));
   const params = new URL(request.url).searchParams;
   const probeRequested = params.get("probe") === "1";
   const templatesRequested = params.get("templates") === "1";

@@ -1,5 +1,9 @@
 import { NextResponse } from "next/server";
-import { normalizeContentSid } from "@/lib/notifications/channels/twilio";
+import {
+  normalizeContentSid,
+  whatsappConfig,
+} from "@/lib/notifications/channels/twilio";
+import { loadWhatsappSettings } from "@/lib/notifications/settings";
 import { getSession } from "@/lib/session";
 
 /**
@@ -24,6 +28,11 @@ export const dynamic = "force-dynamic";
 type SendRequest = {
   to?: string;
   from?: string;
+  /**
+   * A candidate Content Template sid, tried without being stored. It lets an
+   * operator check a sid from the Twilio console before activating it.
+   */
+  contentSid?: string;
 };
 
 function withWhatsappPrefix(value: string): string {
@@ -38,7 +47,23 @@ export async function POST(request: Request) {
 
   const accountSid = process.env.TWILIO_ACCOUNT_SID;
   const authToken = process.env.TWILIO_AUTH_TOKEN;
-  const contentSid = normalizeContentSid(process.env.TWILIO_WHATSAPP_CONTENT_SID);
+  const runtime = await loadWhatsappSettings({ force: true });
+  const config = whatsappConfig(process.env, runtime);
+
+  const body = (await request.json().catch(() => null)) as SendRequest | null;
+
+  const candidate = body?.contentSid ? normalizeContentSid(body.contentSid.trim()) : null;
+  if (body?.contentSid && !candidate) {
+    return NextResponse.json(
+      {
+        error:
+          "That is not a Content Template sid. It must look like HX followed by 32 hex characters.",
+      },
+      { status: 400 },
+    );
+  }
+
+  const contentSid = candidate ?? config.contentSid;
   if (!accountSid || !authToken || !contentSid) {
     return NextResponse.json(
       { error: "Twilio WhatsApp is not configured on this deployment." },
@@ -46,7 +71,6 @@ export async function POST(request: Request) {
     );
   }
 
-  const body = (await request.json().catch(() => null)) as SendRequest | null;
   const to = body?.to?.trim();
   if (!to) {
     return NextResponse.json(
@@ -55,7 +79,7 @@ export async function POST(request: Request) {
     );
   }
 
-  const from = body?.from?.trim() || process.env.TWILIO_WHATSAPP_FROM;
+  const from = body?.from?.trim() || config.sender;
   if (!from) {
     return NextResponse.json(
       { error: "No WhatsApp sender is configured; pass `from` explicitly." },

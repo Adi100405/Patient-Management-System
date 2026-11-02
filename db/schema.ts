@@ -360,3 +360,21 @@ export const notificationPreferences = pgTable("notification_preferences", {
 });
 
 export type NotificationPreferences = typeof notificationPreferences.$inferSelect;
+
+/**
+ * Operator-set notification configuration.
+ *
+ * A WhatsApp Content Template sid is an *identifier*, not a credential — the
+ * Twilio auth token stays in the environment. Keeping the sid here means an
+ * operator can point the deployment at the right template without waiting for
+ * a redeploy, which matters on a hosting plan where environment changes only
+ * reach the next build. Rows are written by the doctor-only settings endpoint;
+ * nothing else in the app may write them.
+ */
+export const notificationSettings = pgTable("notification_settings", {
+  key: text("key").primaryKey(),
+  value: text("value").notNull(),
+  updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
+});
+
+export type NotificationSetting = typeof notificationSettings.$inferSelect;

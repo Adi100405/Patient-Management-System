@@ -1,4 +1,5 @@
 import { mobileChannelName, notify } from "./index";
+import { loadWhatsappSettings } from "./settings";
 import { appointmentMailContext } from "./context";
 import {
   appointmentCancelled,
@@ -54,6 +55,10 @@ async function deliver(
 ): Promise<DeliveryReport> {
   const prefs = await preferencesForUser(ctx.patientUserId);
   const plan = channelsFor(prefs, { phone: ctx.patientPhone });
+
+  // The WhatsApp template can be pointed at another sid from the database, so
+  // the configuration is refreshed before the transport is chosen.
+  await loadWhatsappSettings();
 
   // One transport carries the short message. The kinds the clinic's approved
   // appointment template can say (booked, moved, reminder) go on WhatsApp when

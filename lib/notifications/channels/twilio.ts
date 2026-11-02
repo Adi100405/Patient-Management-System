@@ -1,4 +1,5 @@
 import type { NotificationChannel, NotificationMessage } from "../types";
+import { cachedWhatsappSettings } from "../settings";
 
 /**
  * Twilio transports for SMS and WhatsApp. Both use the same Messages API, but
@@ -71,27 +72,73 @@ export type WhatsappStatus = {
     valid: boolean;
     /** Last four characters only, enough to compare two environments. */
     tail: string | null;
+    /** Where the sid came from: the environment, or the runtime settings. */
+    source: "env" | "runtime" | null;
   };
   configured: boolean;
 };
 
-export function whatsappStatus(
+/**
+ * The effective WhatsApp configuration.
+ *
+ * The environment comes first, because it is what a deployment is built with;
+ * a runtime setting wins when the operator has deliberately pointed the app at
+ * another template — for example when the environment still carries a template
+ * that Twilio no longer accepts.
+ */
+export type WhatsappConfig = {
+  accountSid: string | null;
+  authToken: string | null;
+  sender: string | null;
+  contentSid: string | null;
+  contentSidSource: "env" | "runtime" | null;
+};
+
+export function whatsappConfig(
   env: Record<string, string | undefined> = process.env,
-): WhatsappStatus {
-  const rawSid = env.TWILIO_WHATSAPP_CONTENT_SID;
-  const contentSid = normalizeContentSid(rawSid);
-  const credentials = Boolean(env.TWILIO_ACCOUNT_SID && env.TWILIO_AUTH_TOKEN);
-  const sender = Boolean(env.TWILIO_WHATSAPP_FROM);
+  runtime: { contentSid: string | null; sender: string | null } = {
+    contentSid: null,
+    sender: null,
+  },
+): WhatsappConfig {
+  const envSid = normalizeContentSid(env.TWILIO_WHATSAPP_CONTENT_SID);
+  const runtimeSid = normalizeContentSid(runtime.contentSid ?? undefined);
+
+  const contentSid = runtimeSid ?? envSid;
+  const contentSidSource = runtimeSid ? "runtime" : envSid ? "env" : null;
 
   return {
-    credentials,
-    sender,
+    accountSid: env.TWILIO_ACCOUNT_SID ?? null,
+    authToken: env.TWILIO_AUTH_TOKEN ?? null,
+    sender: env.TWILIO_WHATSAPP_FROM ?? runtime.sender ?? null,
+    contentSid,
+    contentSidSource,
+  };
+}
+
+export function whatsappStatus(
+  env: Record<string, string | undefined> = process.env,
+  runtime: { contentSid: string | null; sender: string | null } = {
+    contentSid: null,
+    sender: null,
+  },
+): WhatsappStatus {
+  const config = whatsappConfig(env, runtime);
+  const rawSid =
+    env.TWILIO_WHATSAPP_CONTENT_SID ?? runtime.contentSid ?? undefined;
+
+  return {
+    credentials: Boolean(config.accountSid && config.authToken),
+    sender: Boolean(config.sender),
     contentSid: {
       present: Boolean(rawSid && rawSid.trim()),
-      valid: contentSid !== null,
-      tail: contentSid ? contentSid.slice(-4) : null,
+      valid: config.contentSid !== null,
+      tail: config.contentSid ? config.contentSid.slice(-4) : null,
+      source: config.contentSidSource,
     },
-    configured: credentials && sender && contentSid !== null,
+    configured: Boolean(
+      config.accountSid && config.authToken && config.sender && config.contentSid,
+    ),
   };
 }
 
@@ -108,16 +155,19 @@ function createTwilioTransport(
   kind: TwilioKind,
   deps?: { fetchImpl?: FetchLike },
 ): NotificationChannel | null {
-  const accountSid = process.env.TWILIO_ACCOUNT_SID;
-  const authToken = process.env.TWILIO_AUTH_TOKEN;
+  const runtime = cachedWhatsappSettings();
+  const whatsapp = whatsappConfig(process.env, runtime);
+
+  const accountSid = kind === "whatsapp" ? whatsapp.accountSid : process.env.TWILIO_ACCOUNT_SID;
+  const authToken = kind === "whatsapp" ? whatsapp.authToken : process.env.TWILIO_AUTH_TOKEN;
   const fromNumber =
-    kind === "whatsapp" ? process.env.TWILIO_WHATSAPP_FROM : process.env.TWILIO_FROM;
-  const contentSid = normalizeContentSid(process.env.TWILIO_WHATSAPP_CONTENT_SID);
+    kind === "whatsapp" ? whatsapp.sender : process.env.TWILIO_FROM;
+  const contentSid = kind === "whatsapp" ? whatsapp.contentSid : null;
 
   // A malformed template sid is treated as unconfigured rather than trusted:
   // Twilio would reject every send and the ledger would fill with noise.
   if (kind === "whatsapp") {
-    const status = whatsappStatus();
+    const status = whatsappStatus(process.env, runtime);
     if (!status.configured) {
       const missing = [
         !status.credentials && "Twilio credentials",
