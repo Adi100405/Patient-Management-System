@@ -1,14 +1,13 @@
-// Schedula Project — ER Diagram
+// Medrella — ER Diagram
 // Paste this at https://dbdiagram.io → New Diagram → paste → Export PNG/PDF
+// The scheduling core; payments, refunds, visit notes, reminders, care
+// follow-ups and the notification ledger hang off the appointment.
 
 Table USER {
   id int [pk, increment]
   email varchar [unique, not null]
-  phone varchar [unique]
-  password_hash varchar
+  password_hash varchar [not null]
   role enum [not null, note: 'DOCTOR or PATIENT']
-  google_oauth_id varchar [note: 'for Google OAuth login']
-  is_verified boolean [default: false]
   created_at datetime [default: `now()`]
 }
 
@@ -16,10 +15,9 @@ Table PATIENT {
   id int [pk, increment]
   user_id int [unique, not null, ref: > USER.id]
   full_name varchar [not null]
-  date_of_birth date
-  gender enum
-  address varchar
-  emergency_contact varchar
+  phone varchar
+  date_of_birth varchar
+  gender varchar
 }
 
 Table DOCTOR {
@@ -27,32 +25,45 @@ Table DOCTOR {
   user_id int [unique, not null, ref: > USER.id]
   full_name varchar [not null]
   specialization varchar [not null]
-  experience_years int
+  experience_years int [default: 0, not null]
   qualification varchar
-  consultation_fee decimal
-  verification_status enum [default: 'PENDING', note: 'PENDING | APPROVED | REJECTED']
-  verification_token varchar
+  consultation_fee decimal [default: 0, not null]
   bio text
 }
 
 Table AVAILABILITY {
   id int [pk, increment]
   doctor_id int [not null, ref: > DOCTOR.id]
-  day_of_week enum [not null, note: 'MON to SUN']
-  start_time time [not null]
-  end_time time [not null]
-  slot_duration_minutes int [default: 30]
-  max_appointments int [default: 1, note: 'elastic scheduling capacity']
+  scheduling_type enum [not null, default: 'wave', note: 'WAVE or STREAM']
+  day_of_week int [note: '0 = Sunday .. 6 = Saturday; null for a dated block']
+  start_time varchar [not null, note: 'clinic wall clock, "09:00"']
+  end_time varchar [not null, note: 'clinic wall clock, "13:00"']
+  slot_minutes int [not null, default: 30, note: 'wave: visit length; stream: derived spacing']
+  capacity int [not null, default: 1, note: 'wave: patients per slot; stream: patients in the window']
   is_active boolean [default: true]
+}
+
+Table AVAILABILITY_DATE {
+  availability_id int [not null, ref: > AVAILABILITY.id]
+  date varchar [not null, note: '"2026-11-12"']
 }
 
 Table APPOINTMENT {
   id int [pk, increment]
   patient_id int [not null, ref: > PATIENT.id]
   doctor_id int [not null, ref: > DOCTOR.id]
-  availability_id int [not null, ref: > AVAILABILITY.id]
-  appointment_time datetime [not null]
-  status enum [default: 'BOOKED', note: 'BOOKED | CONFIRMED | CANCELLED | RESCHEDULED | COMPLETED']
+  availability_id int [ref: > AVAILABILITY.id]
+  appointment_date varchar [not null, note: '"2026-10-28"']
+  appointment_time varchar [not null, note: '"10:30"']
+  seat_number int [not null, default: 1, note: 'which seat in the slot, from one']
+  status enum [default: 'booked', not null, note: 'BOOKED | COMPLETED | CANCELLED | NO_SHOW']
   reason varchar
-  booked_at datetime [default: `now()`]
+  created_at datetime [default: `now()`]
 }
+
+// Capacity is a database fact, not a UI hint. This partial unique index
+// refuses a booking that would overfill a slot; a cancelled row leaves the
+// index, so its seat returns to the pool automatically.
+CREATE UNIQUE INDEX appointments_booked_seat_unique
+  ON APPOINTMENT (doctor_id, appointment_date, appointment_time, seat_number)
+  WHERE status = 'booked';
