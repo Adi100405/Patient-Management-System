@@ -3,7 +3,7 @@ import { and, asc, eq, gte, inArray, lte } from "drizzle-orm";
 import { after } from "next/server";
 import { Bookmark, Calendar, Check, Clock, Receipt, RefreshCw } from "lucide-react";
 import { getDb } from "@/db";
-import { appointments, availability, doctors, patients, payments, users, visitNotes } from "@/db/schema";
+import { appointments, doctors, patients, payments, users, visitNotes } from "@/db/schema";
 import type { AppointmentStatus } from "@/db/schema";
 import { CancelAppointment } from "@/components/cancel-appointment";
 import { Badge } from "@/components/ui/badge";
@@ -13,13 +13,15 @@ import { PaymentCheckout } from "@/components/payment-checkout";
 import { NotificationPreferences } from "@/components/notification-preferences";
 import { RefundStatusLine } from "@/components/refund-status";
 import { RescheduleAppointment, type RescheduleDayOption } from "@/components/reschedule-appointment";
+import { blocksForDoctors } from "@/lib/availability";
 import { describeCancellation } from "@/lib/cancel-preview";
 import { refundsForPatient } from "@/lib/refunds/queries";
 import { preferencesForUser } from "@/lib/notifications/preferences";
 import { sweepReminders } from "@/lib/notifications/reminders";
 import { sweepCareFollowUps } from "@/lib/notifications/care";
 import { requireRole } from "@/lib/session";
-import { availableSlots, clinicNow, upcomingDays } from "@/lib/slots";
+import { clinicNow, dayOption, upcomingDays, type DayOption } from "@/lib/slots";
+import { offersFor, openDates } from "@/lib/schedule";
 import { formatDate, formatTime } from "@/lib/utils";
 
 export const dynamic = "force-dynamic";
@@ -125,13 +127,11 @@ export default async function PatientDashboard() {
   const rescheduleDays = new Map<number, RescheduleDayOption[]>();
   const doctorIds = [...new Set(upcoming.map((r) => r.doctorId))];
   const days7 = upcomingDays(7);
+  const horizon = upcomingDays(60);
+  const horizonEnd = horizon[horizon.length - 1]?.date ?? days7[days7.length - 1]!.date;
   if (doctorIds.length > 0) {
-    const windows = await db
-      .select()
-      .from(availability)
-      .where(and(inArray(availability.doctorId, doctorIds), eq(availability.isActive, true)));
+    const blocksByDoctor = await blocksForDoctors(doctorIds);
     const horizonStart = days7[0]!.date;
-    const horizonEnd = days7[days7.length - 1]!.date;
     const allBooked = await db
       .select({
         doctorId: appointments.doctorId,
@@ -148,28 +148,62 @@ export default async function PatientDashboard() {
         ),
       );
 
+    // Seats taken per doctor, per date, per time.
+    const takenByDoctor = new Map<string, Map<string, number>>();
+    for (const booked of allBooked) {
+      const key = `${booked.doctorId}|${booked.date}`;
+      const byTime = takenByDoctor.get(key) ?? new Map<string, number>();
+      byTime.set(booked.time, (byTime.get(booked.time) ?? 0) + 1);
+      takenByDoctor.set(key, byTime);
+    }
+
+    const now = clinicNow();
     for (const row of upcoming) {
-      const doctorWindows = windows.filter((w) => w.doctorId === row.doctorId);
+      const doctorBlocks = blocksByDoctor.get(row.doctorId) ?? [];
+      const candidates = new Map<string, DayOption>();
+      for (const day of days7) candidates.set(day.date, day);
+      for (const block of doctorBlocks) {
+        for (const date of block.dates) {
+          if (date < now.date || date > horizonEnd) continue;
+          if (!candidates.has(date)) candidates.set(date, dayOption(date));
+        }
+      }
+
       rescheduleDays.set(
         row.id,
-        days7.map((day) => ({
-          date: day.date,
-          label: day.label,
-          isToday: day.isToday,
-          times: availableSlots({
-            windows: doctorWindows.filter((w) => w.dayOfWeek === day.dayOfWeek),
+        openDates(
+          doctorBlocks,
+          [...candidates.values()].sort((a, b) => a.date.localeCompare(b.date)),
+        ).map((day) => {
+          // The appointment being rescheduled is not its own competitor, so its
+          // own seat is given back before the tally is read.
+          const taken = new Map(
+            takenByDoctor.get(`${row.doctorId}|${day.date}`) ?? new Map<string, number>(),
+          );
+          if (day.date === row.date) {
+            const own = taken.get(row.time);
+            if (own !== undefined) taken.set(row.time, own - 1);
+          }
+
+          return {
             date: day.date,
-            bookedTimes: allBooked
-              .filter(
-                (b) =>
-                  b.doctorId === row.doctorId &&
-                  b.date === day.date &&
-                  // The appointment being rescheduled is not its own competitor.
-                  !(b.date === row.date && b.time === row.time),
-              )
-              .map((b) => b.time),
-          }),
-        })),
+            label: day.label,
+            isToday: day.isToday,
+            slots: offersFor({
+              blocks: doctorBlocks,
+              date: day.date,
+              takenSeats: taken,
+              now,
+            })
+              .filter((offer) => offer.free > 0)
+              .map((offer) => ({
+                time: offer.time,
+                free: offer.free,
+                seats: offer.seats,
+                schedulingType: offer.schedulingType,
+              })),
+          };
+        }),
       );
     }
   }
@@ -297,7 +331,7 @@ export default async function PatientDashboard() {
                     })}
                   />
                   {(rescheduleDays.get(row.id) ?? []).some(
-                    (d) => d.times.some((time) => !(d.date === row.date && time === row.time)),
+                    (d) => d.slots.some((slot) => !(d.date === row.date && slot.time === row.time)),
                   ) && (
                     <RescheduleAppointment
                       appointmentId={row.id}

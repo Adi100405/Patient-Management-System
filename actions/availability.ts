@@ -3,10 +3,12 @@
 import { and, eq, gte, sql } from "drizzle-orm";
 import { revalidatePath } from "next/cache";
 import { getDb } from "@/db";
-import { appointments, availability } from "@/db/schema";
+import { appointments, availability, availabilityDates } from "@/db/schema";
 import { availabilitySchema, fieldErrors } from "@/lib/auth";
+import { blocksForDoctor } from "@/lib/availability";
 import { requireRole } from "@/lib/session";
 import { clinicNow } from "@/lib/slots";
+import { blocksConflict, streamSpacing, type ScheduleBlock } from "@/lib/schedule";
 
 export type AvailabilityState = {
   error?: string;
@@ -19,13 +21,24 @@ function revalidateDoctor(doctorId: number) {
   revalidatePath(`/doctors/${doctorId}`);
 }
 
+/**
+ * Publishes a schedule block.
+ *
+ * A block is weekly or date-based, never both, and it may not cover a clock
+ * time another block already covers on the same date: two overlapping blocks
+ * would compete for the same seats and the seat numbers would stop meaning
+ * anything.
+ */
 export async function addAvailability(
   _prev: AvailabilityState,
   formData: FormData,
 ): Promise<AvailabilityState> {
   const session = await requireRole("doctor");
 
-  const parsed = availabilitySchema.safeParse(Object.fromEntries(formData.entries()));
+  const parsed = availabilitySchema.safeParse({
+    ...Object.fromEntries(formData.entries()),
+    dates: formData.getAll("dates").map(String),
+  });
   if (!parsed.success) {
     return { errors: fieldErrors(parsed.error) };
   }
@@ -33,29 +46,47 @@ export async function addAvailability(
   const data = parsed.data;
   const db = getDb();
 
-  const [duplicate] = await db
-    .select({ id: availability.id })
-    .from(availability)
-    .where(
-      and(
-        eq(availability.doctorId, session.profileId),
-        eq(availability.dayOfWeek, data.dayOfWeek),
-        eq(availability.startTime, data.startTime),
-      ),
-    )
-    .limit(1);
-
-  if (duplicate) {
-    return { error: "You already have a window starting at that time on that day." };
-  }
-
-  await db.insert(availability).values({
-    doctorId: session.profileId,
-    dayOfWeek: data.dayOfWeek,
+  const candidate: ScheduleBlock = {
+    id: -1,
+    schedulingType: data.schedulingType,
+    dayOfWeek: data.recurrence === "weekly" ? (data.dayOfWeek ?? null) : null,
+    dates: data.recurrence === "dates" ? data.dates : [],
     startTime: data.startTime,
     endTime: data.endTime,
-    slotMinutes: data.slotMinutes,
-  });
+    // A stream has no visit length of its own: the distance between its
+    // positions is the window divided by the capacity.
+    slotMinutes:
+      data.schedulingType === "wave"
+        ? (data.slotMinutes ?? 30)
+        : streamSpacing(data.startTime, data.endTime, data.capacity),
+    capacity: data.capacity,
+  };
+
+  const existing = await blocksForDoctor(session.profileId);
+  if (existing.some((block) => blocksConflict(candidate, block))) {
+    return {
+      error: "You already cover that time on that day. Remove the other window first.",
+    };
+  }
+
+  const [created] = await db
+    .insert(availability)
+    .values({
+      doctorId: session.profileId,
+      schedulingType: candidate.schedulingType,
+      dayOfWeek: candidate.dayOfWeek,
+      startTime: candidate.startTime,
+      endTime: candidate.endTime,
+      slotMinutes: candidate.slotMinutes,
+      capacity: candidate.capacity,
+    })
+    .returning({ id: availability.id });
+
+  if (candidate.dates.length > 0) {
+    await db.insert(availabilityDates).values(
+      candidate.dates.map((date) => ({ availabilityId: created!.id, date })),
+    );
+  }
 
   revalidateDoctor(session.profileId);
   return { message: "Availability added." };

@@ -4,22 +4,25 @@ import { and, eq, gt, isNotNull, lt, lte, or } from "drizzle-orm";
 import { revalidatePath } from "next/cache";
 import { z } from "zod";
 import { getDb } from "@/db";
-import { appointments, availability, doctors, payments, visitNotes } from "@/db/schema";
+import { BOOKED_SEAT_INDEX, appointments, doctors, payments, visitNotes } from "@/db/schema";
 import { bookingSchema } from "@/lib/auth";
+import { blocksForDoctor } from "@/lib/availability";
 import { isUniqueViolation } from "@/lib/db-errors";
 import { refundLineFor, sendBookingConfirmation, sendCancellationNotice, sendRescheduleNotice } from "@/lib/notifications/events";
 import { getPaymentProvider, PAYMENT_HOLD_MINUTES } from "@/lib/payments";
 import { refundForCancellation, type RefundOutcome } from "@/lib/refunds/service";
+import { takenSeatNumbers } from "@/lib/seats";
 import { requireSession } from "@/lib/session";
 import { normalizeAftercare, normalizeFollowUpDays } from "@/lib/visit-notes";
 import {
-  availableSlots,
-  buildSlots,
-  clinicClock,
-  clinicNow,
-  dayOfWeekFor,
-  slotArrived,
-} from "@/lib/slots";
+  blockAppliesOn,
+  positionsFor,
+  seatFor,
+  slotHasStarted,
+  type Position,
+  type ScheduleBlock,
+} from "@/lib/schedule";
+import { clinicClock, clinicNow, slotArrived } from "@/lib/slots";
 import { formatDate, formatTime } from "@/lib/utils";
 
 export type BookingState = {
@@ -29,6 +32,24 @@ export type BookingState = {
   payment?: { amount: string; currency: string; online: boolean };
 } | null;
 
+/**
+ * How many times a booking tries to take a seat before giving up.
+ *
+ * The seat index is the authority: a patient who loses the race for seat one
+ * re-reads the taken seats and takes the next free one, so two patients racing
+ * for a three-patient wave both succeed instead of one being told the slot was
+ * taken.
+ */
+const MAX_SEAT_ATTEMPTS = 3;
+
+/**
+ * Books a slot, taking one of its seats.
+ *
+ * The slot must belong to a published block that is open on that date, and the
+ * time must be one of the block's own positions. The seat is chosen from the
+ * seats still free, and the database's unique index has the final say — if
+ * another patient took the seat first, the booking takes the next one.
+ */
 export async function bookAppointment(
   _prev: BookingState,
   formData: FormData,
@@ -49,18 +70,23 @@ export async function bookAppointment(
   // checkout for it and the response can report the fee that is now due.
   let appointmentId: number | undefined;
 
-  const [slotWindow] = await db
-    .select()
-    .from(availability)
-    .where(and(eq(availability.id, data.availabilityId), eq(availability.doctorId, data.doctorId)))
-    .limit(1);
-
-  if (!slotWindow || !slotWindow.isActive) {
+  const blocks = await blocksForDoctor(data.doctorId);
+  const slotWindow = blocks.find((block) => block.id === data.availabilityId);
+  if (!slotWindow) {
     return { error: "That availability window is no longer offered." };
   }
 
-  if (slotWindow.dayOfWeek !== dayOfWeekFor(data.date)) {
+  if (!blockAppliesOn(slotWindow, data.date)) {
     return { error: "The doctor does not consult on that day." };
+  }
+
+  const position = positionsFor(slotWindow).find((slot) => slot.time === data.time);
+  if (!position) {
+    return { error: "That time is not one of this doctor's published slots." };
+  }
+
+  if (slotHasStarted(data.date, data.time, clinicNow())) {
+    return { error: "That slot has already started." };
   }
 
   const [doctor] = await db
@@ -100,47 +126,51 @@ export async function bookAppointment(
     }
   }
 
-  const booked = await db
-    .select({ time: appointments.appointmentTime })
-    .from(appointments)
-    .where(
-      and(
-        eq(appointments.doctorId, data.doctorId),
-        eq(appointments.appointmentDate, data.date),
-        eq(appointments.status, "booked"),
-      ),
-    );
+  for (let attempt = 1; attempt <= MAX_SEAT_ATTEMPTS; attempt += 1) {
+    const taken = await takenSeatNumbers({
+      doctorId: data.doctorId,
+      date: data.date,
+      time: data.time,
+    });
+    const seat = seatFor(taken, position.seats);
 
-  const open = availableSlots({
-    windows: [slotWindow],
-    date: data.date,
-    bookedTimes: booked.map((b) => b.time),
-  });
+    if (seat === null) {
+      return { error: "That slot is full." };
+    }
 
-  if (!open.includes(data.time)) {
+    try {
+      const [appointment] = await db
+        .insert(appointments)
+        .values({
+          patientId: session.profileId,
+          doctorId: data.doctorId,
+          availabilityId: slotWindow.id,
+          appointmentDate: data.date,
+          appointmentTime: data.time,
+          seatNumber: seat,
+          reason: data.reason,
+        })
+        .returning({ id: appointments.id });
+      appointmentId = appointment.id;
+      break;
+    } catch (error) {
+      // Another patient took this seat between the read and this write. The
+      // index refused the write, so the booking takes the next free seat.
+      if (!isUniqueViolation(error, BOOKED_SEAT_INDEX)) throw error;
+    }
+  }
+
+  if (appointmentId === undefined) {
     return { error: "That slot was just taken. Please choose another time." };
   }
 
   try {
-    const [appointment] = await db
-      .insert(appointments)
-      .values({
-        patientId: session.profileId,
-        doctorId: data.doctorId,
-        availabilityId: slotWindow.id,
-        appointmentDate: data.date,
-        appointmentTime: data.time,
-        reason: data.reason,
-      })
-      .returning({ id: appointments.id });
-    appointmentId = appointment.id;
-
     // Every booking owns exactly one payment row from the moment it exists, so
     // refunds, receipts and history never have to guess what was owed.
     // Online: the slot is held until the webhook settles it. Manual: the fee is
     // collected at the clinic and the appointment stands on its own.
     await db.insert(payments).values({
-      appointmentId: appointment.id,
+      appointmentId,
       patientId: session.profileId,
       doctorId: data.doctorId,
       amount: doctor.fee,
@@ -150,15 +180,8 @@ export async function bookAppointment(
       expiresAt: online ? new Date(Date.now() + PAYMENT_HOLD_MINUTES * 60_000) : null,
     });
   } catch (error) {
-    // The partial unique index is the authoritative guard against two patients
-    // racing for the same slot between the read above and this insert.
-    if (isUniqueViolation(error, "appointments_booked_slot_unique")) {
-      return { error: "That slot was just taken. Please choose another time." };
-    }
     // Compensate: a booking must never survive without its payment row.
-    if (appointmentId !== undefined) {
-      await db.delete(appointments).where(eq(appointments.id, appointmentId));
-    }
+    await db.delete(appointments).where(eq(appointments.id, appointmentId));
     throw error;
   }
 
@@ -168,9 +191,7 @@ export async function bookAppointment(
 
   // Notification after the fact, never inside the transactional path: a booking
   // this successful must not fail because an email could not be sent.
-  if (appointmentId !== undefined) {
-    await sendBookingConfirmation(appointmentId, { online });
-  }
+  await sendBookingConfirmation(appointmentId, { online });
 
   return {
     message: `Booked for ${data.date} at ${data.time}`,
@@ -391,68 +412,64 @@ export async function rescheduleAppointment(
 
   // The new slot must come from the doctor's published availability, exactly
   // like a fresh booking — a reschedule cannot invent consulting hours.
-  const windows = await db
-    .select()
-    .from(availability)
-    .where(and(eq(availability.doctorId, appointment.doctorId), eq(availability.isActive, true)));
+  const blocks = await blocksForDoctor(appointment.doctorId);
+  const matches: { block: ScheduleBlock; position: Position }[] = [];
+  for (const block of blocks) {
+    if (!blockAppliesOn(block, date)) continue;
+    const position = positionsFor(block).find((slot) => slot.time === time);
+    if (position) matches.push({ block, position });
+  }
 
-  const dayOfWeek = dayOfWeekFor(date);
-  const matchingWindow = windows.find(
-    (w) => w.dayOfWeek === dayOfWeek && buildSlots(w).includes(time),
-  );
-  if (!matchingWindow) {
+  const match = matches.at(0);
+  if (!match) {
     return { error: "The doctor does not offer that time. Pick another slot." };
-  }
-
-  const bookedRows = await db
-    .select({ date: appointments.appointmentDate, time: appointments.appointmentTime })
-    .from(appointments)
-    .where(
-      and(
-        eq(appointments.doctorId, appointment.doctorId),
-        // Only live bookings hold a slot. Cancelled, completed and no-show rows
-        // must never block a patient from moving into that time later.
-        eq(appointments.status, "booked"),
-        eq(appointments.appointmentDate, date),
-      ),
-    );
-  const bookedByDate = new Map<string, string[]>();
-  for (const row of bookedRows) {
-    bookedByDate.set(row.date, [...(bookedByDate.get(row.date) ?? []), row.time]);
-  }
-  // The appointment's own current slot counts as free here — it is the row
-  // being moved, not a competitor.
-  const free = availableSlots({
-    windows: windows.filter((w) => w.dayOfWeek === dayOfWeek),
-    date,
-    bookedTimes: (bookedByDate.get(date) ?? []).filter(
-      (t) => !(date === appointment.appointmentDate && t === appointment.appointmentTime),
-    ),
-  });
-  if (!free.includes(time)) {
-    return { error: "That slot was just taken. Pick another time." };
   }
 
   const previousDate = appointment.appointmentDate;
   const previousTime = appointment.appointmentTime;
 
-  try {
-    const moved = await db
-      .update(appointments)
-      .set({ appointmentDate: date, appointmentTime: time, availabilityId: matchingWindow.id })
-      .where(and(eq(appointments.id, id), eq(appointments.status, "booked")))
-      .returning({ id: appointments.id });
+  let moved = false;
+  for (let attempt = 1; attempt <= MAX_SEAT_ATTEMPTS; attempt += 1) {
+    // The appointment's own seat is not a competitor for itself.
+    const taken = await takenSeatNumbers({
+      doctorId: appointment.doctorId,
+      date,
+      time,
+      exceptAppointmentId: appointment.id,
+    });
+    const seat = seatFor(taken, match.position.seats);
 
-    if (moved.length === 0) {
-      return { error: "That appointment is no longer bookable." };
+    if (seat === null) {
+      return { error: "That slot is full. Pick another time." };
     }
-  } catch (error) {
-    // Someone else took the slot between our check and this write. The index
-    // refused the move; the appointment is untouched.
-    if (isUniqueViolation(error, "appointments_booked_slot_unique")) {
-      return { error: "That slot was just taken. Pick another time." };
+
+    try {
+      const updated = await db
+        .update(appointments)
+        .set({
+          appointmentDate: date,
+          appointmentTime: time,
+          availabilityId: match.block.id,
+          seatNumber: seat,
+        })
+        .where(and(eq(appointments.id, id), eq(appointments.status, "booked")))
+        .returning({ id: appointments.id });
+
+      if (updated.length === 0) {
+        return { error: "That appointment is no longer bookable." };
+      }
+
+      moved = true;
+      break;
+    } catch (error) {
+      // Someone else took the seat between our check and this write. The index
+      // refused the move; the appointment is untouched, so take the next seat.
+      if (!isUniqueViolation(error, BOOKED_SEAT_INDEX)) throw error;
     }
-    throw error;
+  }
+
+  if (!moved) {
+    return { error: "That slot was just taken. Pick another time." };
   }
 
   revalidatePath("/dashboard/patient");
