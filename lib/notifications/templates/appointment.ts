@@ -8,7 +8,6 @@ import {
   signOff,
   visitLine,
   visitRows,
-  whatsappWhen,
 } from "./shared";
 import type { AppointmentMailContext, MailContent } from "./shared";
 
@@ -25,7 +24,6 @@ export function bookingConfirmed(
   return {
     subject: `Appointment booked — ${formatDate(ctx.date)} at ${formatTime(ctx.time)}`,
     sms: `Medrella: appointment booked — ${formatDate(ctx.date)} at ${formatTime(ctx.time)}, Dr. ${ctx.doctorName}. Details: your Medrella dashboard.`,
-    whatsapp: whatsappWhen(ctx),
     text: [
       greeting(ctx),
       "Your appointment is booked.",
@@ -120,7 +118,6 @@ export function appointmentRescheduled(
   return {
     subject: `Appointment rescheduled — ${formatDate(ctx.date)} at ${formatTime(ctx.time)}`,
     sms: `Medrella: your appointment is moved to ${formatDate(ctx.date)} at ${formatTime(ctx.time)}, Dr. ${ctx.doctorName}. Previous time: ${formatDate(options.previousDate)} ${formatTime(options.previousTime)}.`,
-    whatsapp: whatsappWhen(ctx),
     text: [
       greeting(ctx),
       "Your appointment has been moved to a new time.",
@@ -156,7 +153,6 @@ export function reminder(
   return {
     subject: `Reminder — appointment with Dr. ${ctx.doctorName} ${options.kind === "24h" ? "tomorrow" : "in an hour"}`,
     sms: `Medrella: reminder — appointment with Dr. ${ctx.doctorName} ${when} at ${formatTime(ctx.time)}.`,
-    whatsapp: whatsappWhen(ctx),
     text: [
       greeting(ctx),
       options.kind === "24h"

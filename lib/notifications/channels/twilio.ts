@@ -1,146 +1,22 @@
 import type { NotificationChannel, NotificationMessage } from "../types";
-import { cachedWhatsappSettings } from "../settings";
 
 /**
- * Twilio transports for SMS and WhatsApp. Both use the same Messages API, but
- * they are deliberately not shape-shifting copies of each other: SMS carries a
- * free-form `Body`, while WhatsApp carries an approved Content Template —
- * `ContentSid` plus `ContentVariables` and no `Body` at all.
+ * The Twilio SMS transport.
  *
  * Configuration:
- *   TWILIO_ACCOUNT_SID           — from the Twilio console dashboard
- *   TWILIO_AUTH_TOKEN            — the paired auth token
- *   TWILIO_FROM                  — SMS-capable number or messaging service,
- *                                  E.164
- *   TWILIO_WHATSAPP_FROM         — WhatsApp sender, E.164
- *   TWILIO_WHATSAPP_CONTENT_SID  — the approved Content Template's `HX…` sid.
- *                                  The clinic's one appointment template must
- *                                  use `{{1}}` for the visit date and `{{2}}`
- *                                  for the visit time.
+ *   TWILIO_ACCOUNT_SID  — from the Twilio console dashboard
+ *   TWILIO_AUTH_TOKEN   — the paired auth token
+ *   TWILIO_FROM         — SMS-capable number or messaging service, E.164
  *
- * WhatsApp is template-only on purpose: business-initiated free-form messages
- * are rejected by Twilio the moment the recipient's 24-hour window is closed
- * (and always on accounts without a registered sender), so a free-form send is
- * never attempted here. A message without template variables is refused before
- * the API is called, and a malformed or missing template sid counts as
- * "WhatsApp not configured" — the mobile message then rides SMS upstream (see
- * `events.ts`). Consent is to "mobile updates", never to a specific network.
+ * Twilio also used to carry WhatsApp from this file. That transport is gone:
+ * a WhatsApp send needs a Meta-approved Content Template, and the only one
+ * this project could use was a fixed body that ignored the appointment date,
+ * so a booking could have gone out with the wrong day on it. Mobile messages
+ * ride SMS instead — see `events.ts`.
  */
-type TwilioKind = "sms" | "whatsapp";
-
 type FetchLike = (input: string, init?: RequestInit) => Promise<Response>;
 
-const LABEL: Record<TwilioKind, string> = { sms: "SMS", whatsapp: "WhatsApp" };
-
-/** Content Template sids look like `HX` followed by 32 hex digits. */
-const CONTENT_SID_PATTERN = /^HX[0-9a-f]{32}$/i;
-
-/**
- * Accepts a Content Template sid the way it actually arrives from the Twilio
- * console: trimmed, optionally wrapped in quotes, and — because the console's
- * API snippet is the obvious place to copy from — optionally prefixed with
- * `ContentSid=`. Twilio's own pattern (`^HX[0-9a-fA-F]{32}$`) treats hex case
- * as insignificant, so this does too. Anything else stays `null`: a malformed
- * sid counts as "WhatsApp not configured" rather than being sent to Twilio.
- */
-export function normalizeContentSid(raw: string | undefined): string | null {
-  if (!raw) return null;
-
-  let value = raw.trim();
-  const unquote = (input: string) => {
-    const first = input[0];
-    const last = input[input.length - 1];
-    return input.length >= 2 &&
-      ((first === '"' && last === '"') || (first === "'" && last === "'"))
-      ? input.slice(1, -1).trim()
-      : input;
-  };
-
-  value = unquote(value);
-  value = value.replace(/^contentsid\s*=\s*/i, "");
-  value = unquote(value.trim());
-
-  return CONTENT_SID_PATTERN.test(value) ? value : null;
-}
-
-/** What the deployment can see of the WhatsApp setup, without any secrets. */
-export type WhatsappStatus = {
-  credentials: boolean;
-  sender: boolean;
-  contentSid: {
-    present: boolean;
-    valid: boolean;
-    /** Last four characters only, enough to compare two environments. */
-    tail: string | null;
-    /** Where the sid came from: the environment, or the runtime settings. */
-    source: "env" | "runtime" | null;
-  };
-  configured: boolean;
-};
-
-/**
- * The effective WhatsApp configuration.
- *
- * The environment comes first, because it is what a deployment is built with;
- * a runtime setting wins when the operator has deliberately pointed the app at
- * another template — for example when the environment still carries a template
- * that Twilio no longer accepts.
- */
-export type WhatsappConfig = {
-  accountSid: string | null;
-  authToken: string | null;
-  sender: string | null;
-  contentSid: string | null;
-  contentSidSource: "env" | "runtime" | null;
-};
-
-export function whatsappConfig(
-  env: Record<string, string | undefined> = process.env,
-  runtime: { contentSid: string | null; sender: string | null } = {
-    contentSid: null,
-    sender: null,
-  },
-): WhatsappConfig {
-  const envSid = normalizeContentSid(env.TWILIO_WHATSAPP_CONTENT_SID);
-  const runtimeSid = normalizeContentSid(runtime.contentSid ?? undefined);
-
-  const contentSid = runtimeSid ?? envSid;
-  const contentSidSource = runtimeSid ? "runtime" : envSid ? "env" : null;
-
-  return {
-    accountSid: env.TWILIO_ACCOUNT_SID ?? null,
-    authToken: env.TWILIO_AUTH_TOKEN ?? null,
-    sender: env.TWILIO_WHATSAPP_FROM ?? runtime.sender ?? null,
-    contentSid,
-    contentSidSource,
-  };
-}
-
-export function whatsappStatus(
-  env: Record<string, string | undefined> = process.env,
-  runtime: { contentSid: string | null; sender: string | null } = {
-    contentSid: null,
-    sender: null,
-  },
-): WhatsappStatus {
-  const config = whatsappConfig(env, runtime);
-  const rawSid =
-    env.TWILIO_WHATSAPP_CONTENT_SID ?? runtime.contentSid ?? undefined;
-
-  return {
-    credentials: Boolean(config.accountSid && config.authToken),
-    sender: Boolean(config.sender),
-    contentSid: {
-      present: Boolean(rawSid && rawSid.trim()),
-      valid: config.contentSid !== null,
-      tail: config.contentSid ? config.contentSid.slice(-4) : null,
-      source: config.contentSidSource,
-    },
-    configured: Boolean(
-      config.accountSid && config.authToken && config.sender && config.contentSid,
-    ),
-  };
-}
+const LABEL = "SMS";
 
 /**
  * Twilio trial accounts cannot send a free-form SMS at all. The Messages API
@@ -239,41 +115,16 @@ function normalizeE164(phone: string): string {
   return cleaned.startsWith("+") ? cleaned : `+${cleaned}`;
 }
 
-function createTwilioTransport(
-  kind: TwilioKind,
-  deps?: { fetchImpl?: FetchLike },
-): NotificationChannel | null {
-  const runtime = cachedWhatsappSettings();
-  const whatsapp = whatsappConfig(process.env, runtime);
-
-  const accountSid = kind === "whatsapp" ? whatsapp.accountSid : process.env.TWILIO_ACCOUNT_SID;
-  const authToken = kind === "whatsapp" ? whatsapp.authToken : process.env.TWILIO_AUTH_TOKEN;
-  const fromNumber =
-    kind === "whatsapp" ? whatsapp.sender : process.env.TWILIO_FROM;
-  const contentSid = kind === "whatsapp" ? whatsapp.contentSid : null;
-
-  // A malformed template sid is treated as unconfigured rather than trusted:
-  // Twilio would reject every send and the ledger would fill with noise.
-  if (kind === "whatsapp") {
-    const status = whatsappStatus(process.env, runtime);
-    if (!status.configured) {
-      const missing = [
-        !status.credentials && "Twilio credentials",
-        !status.sender && "TWILIO_WHATSAPP_FROM",
-        !status.contentSid.present && "TWILIO_WHATSAPP_CONTENT_SID",
-        status.contentSid.present && !status.contentSid.valid && "a valid HX… Content sid",
-      ].filter(Boolean);
-      console.warn(`[notification] WhatsApp disabled — check ${missing.join(", ")}.`);
-      return null;
-    }
-  }
+export function createTwilioChannel(deps?: { fetchImpl?: FetchLike }): NotificationChannel | null {
+  const accountSid = process.env.TWILIO_ACCOUNT_SID;
+  const authToken = process.env.TWILIO_AUTH_TOKEN;
+  const fromNumber = process.env.TWILIO_FROM;
 
   if (!accountSid || !authToken || !fromNumber) {
     return null;
   }
 
-  const prefix = kind === "whatsapp" ? "whatsapp:" : "";
-  const from = `${prefix}${normalizeE164(fromNumber)}`;
+  const from = normalizeE164(fromNumber);
   const doFetch = deps?.fetchImpl ?? fetch;
 
   const request = {
@@ -288,30 +139,13 @@ function createTwilioTransport(
   } satisfies RequestInit;
 
   return {
-    name: kind === "whatsapp" ? "twilio-whatsapp" : "twilio",
+    name: "twilio",
     async send(message: NotificationMessage) {
       const params = new URLSearchParams({
-        To: `${prefix}${normalizeE164(message.to)}`,
+        To: normalizeE164(message.to),
         From: from,
+        Body: message.text,
       });
-
-      // The two transports are not interchangeable, so the message parameters
-      // are built on mutually exclusive branches: SMS speaks freely, WhatsApp
-      // only repeats what the clinic's approved template can say.
-      if (kind === "sms") {
-        params.set("Body", message.text);
-      } else if (!contentSid) {
-        throw new Error(
-          "Twilio WhatsApp requires an approved Content Template (ContentSid); none is configured.",
-        );
-      } else if (!message.contentVariables) {
-        throw new Error(
-          "Twilio WhatsApp is template-only: this message has no Content Template variables, so it should ride SMS instead of WhatsApp.",
-        );
-      } else {
-        params.set("ContentSid", contentSid);
-        params.set("ContentVariables", JSON.stringify(message.contentVariables));
-      }
 
       const post = (payload: URLSearchParams) =>
         doFetch(apiRoot(accountSid), { ...request, body: payload.toString() });
@@ -329,7 +163,7 @@ function createTwilioTransport(
         // only a predefined template name. Retrying once keeps the demo
         // deliverable and says plainly, in the log, that the handset is about
         // to show Twilio's sentence rather than the clinic's.
-        if (kind === "sms" && isTrialTemplateRejection(response.status, body)) {
+        if (isTrialTemplateRejection(response.status, body)) {
           const template = smsTrialTemplate(message.meta?.kind);
           console.warn(
             `[notification] Twilio trial account: "${message.meta?.kind ?? "untyped"}" went out as the predefined "${template}" SMS — the clinic's own text needs an upgraded account.`,
@@ -337,7 +171,7 @@ function createTwilioTransport(
 
           const retried = await post(
             new URLSearchParams({
-              To: `${prefix}${normalizeE164(message.to)}`,
+              To: normalizeE164(message.to),
               From: from,
               Body: template,
             }),
@@ -350,12 +184,12 @@ function createTwilioTransport(
 
           const retryBody = await retried.text().catch(() => "");
           throw new Error(
-            `Twilio rejected the ${LABEL[kind]} (${retried.status}): ${retryBody.slice(0, 200)}`,
+            `Twilio rejected the ${LABEL} (${retried.status}): ${retryBody.slice(0, 200)}`,
           );
         }
 
         throw new Error(
-          `Twilio rejected the ${LABEL[kind]} (${response.status}): ${body.slice(0, 200)}`,
+          `Twilio rejected the ${LABEL} (${response.status}): ${body.slice(0, 200)}`,
         );
       }
 
@@ -365,16 +199,6 @@ function createTwilioTransport(
       return { providerRef: payload?.sid ?? null };
     },
   };
-}
-
-export function createTwilioChannel(deps?: { fetchImpl?: FetchLike }): NotificationChannel | null {
-  return createTwilioTransport("sms", deps);
-}
-
-export function createTwilioWhatsAppChannel(deps?: {
-  fetchImpl?: FetchLike;
-}): NotificationChannel | null {
-  return createTwilioTransport("whatsapp", deps);
 }
 
 export type { FetchLike };

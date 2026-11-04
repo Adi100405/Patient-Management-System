@@ -276,6 +276,14 @@ export const careFollowUps = pgTable("care_follow_ups", {
 export type CareFollowUp = typeof careFollowUps.$inferSelect;
 export type CareFollowUpKind = CareFollowUp["kind"];
 
+/**
+ * The channels a ledger row can carry.
+ *
+ * `whatsapp` is legacy: the WhatsApp transport was removed, so no new row can
+ * carry it, but rows written before the removal still do. The value stays in
+ * the enum so that history keeps reading back — dropping it would need a
+ * migration that rewrites rows the ledger exists to preserve.
+ */
 export const notificationChannelEnum = pgEnum("notification_channel", ["email", "sms", "whatsapp"]);
 export const notificationStatusEnum = pgEnum("notification_status", [
   "queued",
@@ -309,9 +317,10 @@ export const notifications = pgTable("notifications", {
    */
   htmlBody: text("html_body"),
   /**
-   * Twilio Content Variables ({"1": …, "2": …}) for the templated WhatsApp
-   * send, stored like htmlBody so the retry sweep re-sends exactly what a
-   * first attempt carried. Null for SMS, email and any non-templated message.
+   * Legacy: the Twilio Content Variables ({"1": …, "2": …}) a templated
+   * WhatsApp send carried. The WhatsApp transport was removed, so nothing
+   * writes this column any more; the column stays so the rows that carry it
+   * keep their history.
    */
   contentVariables: jsonb("content_variables").$type<Record<string, string>>(),
   status: notificationStatusEnum("status").notNull().default("queued"),
@@ -364,12 +373,12 @@ export type NotificationPreferences = typeof notificationPreferences.$inferSelec
 /**
  * Operator-set notification configuration.
  *
- * A WhatsApp Content Template sid is an *identifier*, not a credential — the
- * Twilio auth token stays in the environment. Keeping the sid here means an
- * operator can point the deployment at the right template without waiting for
- * a redeploy, which matters on a hosting plan where environment changes only
- * reach the next build. Rows are written by the doctor-only settings endpoint;
- * nothing else in the app may write them.
+ * Legacy: this table held the WhatsApp Content Template sid and sender, so an
+ * operator could point the deployment at the right template without a
+ * redeploy. The WhatsApp transport was removed and nothing reads or writes the
+ * table now; it stays so the rows it holds keep their history. Dropping it is
+ * a schema change with no runtime benefit, so it waits for a deliberate
+ * migration.
  */
 export const notificationSettings = pgTable("notification_settings", {
   key: text("key").primaryKey(),

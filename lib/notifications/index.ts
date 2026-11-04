@@ -1,10 +1,8 @@
 import { logChannel } from "./channels/log";
 import { createResendChannel } from "./channels/resend";
 import { createSmsChannel } from "./channels/sms";
-import { createTwilioWhatsAppChannel } from "./channels/twilio";
 import { dispatchNotification, retryDueNotifications } from "./dispatch";
-import { loadWhatsappSettings } from "./settings";
-import { dbNotificationStore, type NotificationStore } from "./store";
+import { dbNotificationStore, type LedgerChannel, type NotificationStore } from "./store";
 import type {
   NotificationChannel,
   NotificationChannelName,
@@ -19,7 +17,7 @@ export type {
   NotificationStatus,
 } from "./types";
 
-export type { NotificationRecord, NotificationStore } from "./store";
+export type { LedgerChannel, NotificationRecord, NotificationStore } from "./store";
 
 /**
  * The transport for a channel name, or null when that channel has no provider
@@ -31,30 +29,25 @@ export function getNotificationChannel(): NotificationChannel {
   return createResendChannel() ?? logChannel;
 }
 
-function channelFor(name: NotificationChannelName): NotificationChannel | null {
+/**
+ * The transport for a channel name, or null when that channel has no provider
+ * configured. Email degrades to the log channel so the pipeline is always live;
+ * SMS degrades to a clean skip, because a silently "logged" SMS could be read
+ * as a delivery.
+ *
+ * `whatsapp` is accepted only so a ledger row written before the channel was
+ * removed can still be read: there is no transport for it, so the retry sweep
+ * skips those rows instead of pretending to send them.
+ */
+export function channelFor(name: LedgerChannel): NotificationChannel | null {
   switch (name) {
     case "email":
       return getNotificationChannel();
     case "sms":
       return createSmsChannel();
-    case "whatsapp":
-      return createTwilioWhatsAppChannel();
     default:
       return null;
   }
-}
-
-/**
- * Which transport carries the patient's short "mobile" message.
- *
- * WhatsApp is chosen only when it is fully configured: a sender AND the
- * approved Content Template (`TWILIO_WHATSAPP_CONTENT_SID`), because
- * business-initiated WhatsApp is template-only — free-form sends are rejected
- * whenever the recipient's 24-hour window is closed. Without both this stays
- * SMS, which is itself skipped while unconfigured, never faked.
- */
-export function mobileChannelName(): NotificationChannelName {
-  return createTwilioWhatsAppChannel() ? "whatsapp" : "sms";
 }
 
 export type NotifyResult = {
@@ -88,10 +81,6 @@ export async function notify(
   message: NotificationMessage,
   options?: NotifyOptions,
 ): Promise<NotifyResult> {
-  // The WhatsApp template can be pointed at another sid from the database, so
-  // the configuration is refreshed before a transport is chosen.
-  await loadWhatsappSettings();
-
   const channelName = options?.channel ?? "email";
   const channel = channelFor(channelName);
 
@@ -144,7 +133,6 @@ export async function retryFailedNotifications(options?: {
   now?: Date;
 }): Promise<{ retried: number; sent: number }> {
   try {
-    await loadWhatsappSettings({ force: true });
     return await retryDueNotifications(
       {
         store: dbNotificationStore,

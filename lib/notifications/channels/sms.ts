@@ -6,8 +6,8 @@ import { createVonageChannel, vonageStatus } from "./vonage";
  * The SMS transport, and the provider behind it.
  *
  * SMS is one channel with two possible providers, and the ledger does not care
- * which one carried a message — its channel column is `email | sms | whatsapp`,
- * so a provider swap needs no schema change and no migration.
+ * which one carried a message — its channel column is `email | sms`, so a
+ * provider swap needs no schema change and no migration.
  *
  *   Vonage  — preferred when configured. Its trial delivers the clinic's own
  *             text (with a demo suffix Vonage appends itself), so a free
