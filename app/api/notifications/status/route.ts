@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import { createResendChannel } from "@/lib/notifications/channels/resend";
 import {
   normalizeContentSid,
+  smsStatus,
   whatsappStatus,
 } from "@/lib/notifications/channels/twilio";
 import { loadWhatsappSettings } from "@/lib/notifications/settings";
@@ -305,7 +306,9 @@ export async function GET(request: Request) {
       },
       channels: {
         email: { transport: createResendChannel() ? "resend" : "log" },
-        sms: { configured: Boolean(process.env.TWILIO_FROM) },
+        // Was it the env var or the provider? The sender's last four digits
+        // answer that without exposing the number.
+        sms: smsStatus(process.env),
         whatsapp,
       },
       mobileChannel: whatsapp.configured ? "whatsapp" : "sms",

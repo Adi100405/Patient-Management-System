@@ -29,7 +29,7 @@ Key files:
 
 | File | Responsibility |
 |---|---|
-| `lib/notifications/templates.ts` | Pure message text and markup. One reviewable place for every patient-facing sentence. |
+| `lib/notifications/templates/` | Pure message text and markup. One reviewable place for every patient-facing sentence. |
 | `lib/notifications/email-layout.ts` | The shared HTML shell every email is rendered into. |
 | `lib/notifications/links.ts` | Absolute dashboard / receipt URLs for email buttons. |
 | `lib/notifications/context.ts` | One query that resolves everything a template needs. |
@@ -93,6 +93,33 @@ The sid is read forgivingly: surrounding whitespace, matching quotes, a
 `ContentSid=` prefix and uppercase hex are all accepted, because those are the
 shapes a copy from the console's API snippet can take. Anything else counts as
 unconfigured.
+
+### Trial accounts: predefined SMS templates
+
+A trial Twilio account cannot send a free-form SMS at all. The Messages API
+answers `572006 Invalid template name` unless `Body` is *exactly* the name of
+one of Twilio's predefined templates, so the only text a trial can deliver is
+Twilio's own — always suffixed `Test message from Twilio.`
+
+The transport keeps writing the clinic's real message and treats `572006` as
+"this account is on trial": the send is retried once with the predefined
+template closest to the event, and the server log names the substitution.
+
+| Event | Predefined template |
+|---|---|
+| booked, rescheduled, cancelled, reminder, follow-up prompt | `sms_appointment_reminders` |
+| payment confirmed | `sms_order_confirmation` |
+| refund initiated / completed / failed | `sms_customer_support` |
+| visit thanks | `sms_feedback_surveys` |
+| anything unmapped | `sms_customer_support` |
+
+A paid account never returns `572006`, so the fallback cannot fire there and
+nothing has to be switched off after an upgrade. Until then the handset shows
+Twilio's sentence rather than the clinic's: the ledger still records the text
+the clinic meant to send, and `/api/notifications/status` reports
+`sms.trialFallback: true`. The choice is deliberate — a delivery that says less
+than intended, with a visible test suffix, beats a booking confirmation that
+silently never arrives.
 
 ### Verifying what a deployment can see
 
@@ -192,8 +219,7 @@ faked: every attempt is recorded on the ledger with its reason.
 
 SMS: set `TWILIO_FROM` as well. Indian numbers additionally require TRAI **DLT**
 registration (entity, sender ID, templates), which no provider can skip. Missing
-SMS configuration means the attempt is recorded as not delivered, never
-faked by a fallback.
+SMS configuration means the attempt is recorded as not delivered, never faked.
 
 Every transport uses plain `fetch` with an 8-second timeout, so a hung provider
 can never hold up a booking, payment or refund.

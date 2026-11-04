@@ -40,6 +40,12 @@ export type NotificationMessage = {
  */
 export type NotificationSendResult = {
   providerRef?: string | null;
+  /**
+   * Set when a fallback carried the message instead of the text the clinic
+   * wrote: on a Twilio trial account an SMS goes out as one of Twilio's
+   * predefined templates (`572006`). Null or absent otherwise.
+   */
+  trialTemplate?: string | null;
 };
 
 export type NotificationChannel = {

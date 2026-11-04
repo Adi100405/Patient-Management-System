@@ -1,24 +1,33 @@
 import { NextResponse } from "next/server";
 import {
+  createTwilioChannel,
   normalizeContentSid,
+  smsStatus,
   whatsappConfig,
 } from "@/lib/notifications/channels/twilio";
 import { loadWhatsappSettings } from "@/lib/notifications/settings";
 import { getSession } from "@/lib/session";
 
 /**
- * Sends one template WhatsApp on demand, so a doctor can prove that *this
+ * Sends one test message on demand, so a doctor can prove that *this
  * deployment* can reach Twilio without waiting for a patient to book.
  *
- * It is deliberately an action, not a status read: it POSTs to Twilio and
- * reports exactly what Twilio said. The message carries the same two
- * placeholders the app's appointment templates use (visit date, visit time) and
- * nothing else — no patient name, no reason, no other health information.
+ * `channel` defaults to `whatsapp`; `sms` sends through the same transport the
+ * appointment events use, which means it also honours a trial account's
+ * predefined-template fallback and reports it as `degraded: true` rather than
+ * pretending the clinic's text went out.
  *
- * `from` is optional and defaults to the configured WhatsApp sender. Overriding
- * it is useful on a trial account, where a template can be valid only from a
- * particular sender (the Sandbox number, for instance), and it lets an
- * operator compare senders without redeploying.
+ * For WhatsApp it is deliberately an action, not a status read: it POSTs to
+ * Twilio and reports exactly what Twilio said. The message carries the same two
+ * placeholders the app's appointment templates use (visit date, visit time) and
+ * nothing else — no patient name, no reason, no other health information. The
+ * SMS body is a neutral sentence or the caller's own `text`, never patient data.
+ *
+ * `from` is optional and applies to WhatsApp only: it defaults to the configured
+ * sender. Overriding it is useful on a trial account, where a template can be
+ * valid only from a particular sender (the Sandbox number, for instance), and
+ * it lets an operator compare senders without redeploying. The SMS transport
+ * reads its sender from the deployment's configuration.
  *
  * Doctor-only: this spends the account's trial message quota, so it must not be
  * callable by a patient.
@@ -26,6 +35,7 @@ import { getSession } from "@/lib/session";
 export const dynamic = "force-dynamic";
 
 type SendRequest = {
+  channel?: "sms" | "whatsapp";
   to?: string;
   from?: string;
   /**
@@ -33,7 +43,13 @@ type SendRequest = {
    * operator check a sid from the Twilio console before activating it.
    */
   contentSid?: string;
+  /** SMS only: the body to try. A neutral test sentence by default. */
+  text?: string;
+  /** SMS only: which event the body stands in for, so the trial mapping matches. */
+  kind?: string;
 };
+
+const DEFAULT_SMS_TEXT = "Medrella test SMS: this deployment can reach Twilio.";
 
 function withWhatsappPrefix(value: string): string {
   return value.startsWith("whatsapp:") ? value : `whatsapp:${value}`;
@@ -45,12 +61,18 @@ export async function POST(request: Request) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
 
+  const body = (await request.json().catch(() => null)) as SendRequest | null;
+
+  // SMS goes through the notification transport itself, so a test exercises
+  // the same trial handling a real appointment message would get.
+  if (body?.channel === "sms") {
+    return sendTestSms(body);
+  }
+
   const accountSid = process.env.TWILIO_ACCOUNT_SID;
   const authToken = process.env.TWILIO_AUTH_TOKEN;
   const runtime = await loadWhatsappSettings({ force: true });
   const config = whatsappConfig(process.env, runtime);
-
-  const body = (await request.json().catch(() => null)) as SendRequest | null;
 
   const candidate = body?.contentSid ? normalizeContentSid(body.contentSid.trim()) : null;
   if (body?.contentSid && !candidate) {
@@ -133,6 +155,70 @@ export async function POST(request: Request) {
     return NextResponse.json(
       {
         ok: false,
+        error: error instanceof Error ? error.message : "The Twilio request failed.",
+      },
+      { status: 502, headers: { "cache-control": "no-store" } },
+    );
+  }
+}
+
+/**
+ * One SMS through the real transport. A trial account will refuse the free-form
+ * body (`572006`) and the transport retries with a predefined template; the
+ * answer says so instead of implying the clinic's text was delivered.
+ */
+async function sendTestSms(body: SendRequest) {
+  const status = smsStatus(process.env);
+  if (!status.configured) {
+    return NextResponse.json(
+      {
+        error:
+          "Twilio SMS is not configured on this deployment. It needs TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN and TWILIO_FROM.",
+      },
+      { status: 400 },
+    );
+  }
+
+  const to = body.to?.trim();
+  if (!to) {
+    return NextResponse.json(
+      { error: "A recipient `to` (E.164) is required." },
+      { status: 400 },
+    );
+  }
+
+  const channel = createTwilioChannel();
+  if (!channel) {
+    return NextResponse.json(
+      { error: "No SMS transport is configured on this deployment." },
+      { status: 400 },
+    );
+  }
+
+  try {
+    const result = await channel.send({
+      to,
+      subject: "",
+      text: body.text?.trim() || DEFAULT_SMS_TEXT,
+      meta: { kind: body.kind?.trim() || "diagnostic" },
+    });
+
+    return NextResponse.json(
+      {
+        ok: true,
+        channel: "sms",
+        messageSid: result?.providerRef ?? null,
+        /** Twilio's predefined template, when the trial account forced one. */
+        trialTemplate: result?.trialTemplate ?? null,
+        degraded: Boolean(result?.trialTemplate),
+      },
+      { headers: { "cache-control": "no-store" } },
+    );
+  } catch (error) {
+    return NextResponse.json(
+      {
+        ok: false,
+        channel: "sms",
         error: error instanceof Error ? error.message : "The Twilio request failed.",
       },
       { status: 502, headers: { "cache-control": "no-store" } },

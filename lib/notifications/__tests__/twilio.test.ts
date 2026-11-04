@@ -4,6 +4,8 @@ import {
   createTwilioChannel,
   createTwilioWhatsAppChannel,
   normalizeContentSid,
+  smsStatus,
+  smsTrialTemplate,
   whatsappConfig,
   whatsappStatus,
 } from "@/lib/notifications/channels/twilio";
@@ -100,6 +102,76 @@ describe("Twilio mobile transports", () => {
       if (!channel) throw new Error("channel should be configured in the test environment");
 
       await expect(channel.send(message)).rejects.toThrow("Twilio rejected the SMS (400)");
+    });
+
+    /**
+     * A trial account cannot send free-form text: Twilio answers `572006`
+     * unless `Body` is exactly the name of one of its predefined templates.
+     * The transport keeps writing the real message and degrades once — so an
+     * upgraded account sends the clinic's words and a trial still delivers.
+     */
+    describe("on a trial account", () => {
+      function smsChannel(fetchImpl: Mock<FetchLike>) {
+        process.env.TWILIO_ACCOUNT_SID = "ACtest123";
+        process.env.TWILIO_AUTH_TOKEN = "authtoken";
+        process.env.TWILIO_FROM = "+14155550123";
+
+        const channel = createTwilioChannel({ fetchImpl });
+        if (!channel) throw new Error("channel should be configured in the test environment");
+        return channel;
+      }
+
+      it("retries a 572006 refusal with the predefined template for the event", async () => {
+        const fetchImpl = vi
+          .fn<FetchLike>()
+          .mockResolvedValueOnce(
+            jsonResponse(400, {
+              code: 572006,
+              message: "Trial accounts can only use predefined SMS templates.",
+            }),
+          )
+          .mockResolvedValueOnce(jsonResponse(201, { sid: "SMtrial" }));
+
+        const result = await smsChannel(fetchImpl).send({
+          ...message,
+          meta: { kind: "payment_confirmed" },
+        });
+
+        expect(result).toEqual({
+          providerRef: "SMtrial",
+          trialTemplate: "sms_order_confirmation",
+        });
+        expect(fetchImpl).toHaveBeenCalledTimes(2);
+        // The first attempt is the message the clinic actually wrote.
+        expect(sentParams(fetchImpl, 0).get("Body")).toContain("Medrella");
+        // The retry is Twilio's template *name*, which is the only body a
+        // trial account accepts.
+        expect(sentParams(fetchImpl, 1).get("Body")).toBe("sms_order_confirmation");
+      });
+
+      it("still throws when the retry itself is rejected", async () => {
+        const fetchImpl = vi
+          .fn<FetchLike>()
+          .mockResolvedValueOnce(jsonResponse(400, { code: 572006 }))
+          .mockResolvedValueOnce(
+            jsonResponse(400, { code: 21608, message: "unverified recipient" }),
+          );
+
+        await expect(
+          smsChannel(fetchImpl).send({ ...message, meta: { kind: "reminder_24h" } }),
+        ).rejects.toThrow("Twilio rejected the SMS (400)");
+      });
+
+      it("does not retry an ordinary rejection", async () => {
+        const fetchImpl = vi
+          .fn<FetchLike>()
+          .mockResolvedValue(jsonResponse(400, { code: 21608, message: "unverified" }));
+
+        await expect(
+          smsChannel(fetchImpl).send({ ...message, meta: { kind: "reminder_24h" } }),
+        ).rejects.toThrow();
+        expect(fetchImpl).toHaveBeenCalledTimes(1);
+      });
     });
   });
 
@@ -220,6 +292,66 @@ describe("Content Template sid parsing", () => {
     expect(normalizeContentSid("MG" + "0".repeat(32))).toBeNull();
     expect(normalizeContentSid("HX123")).toBeNull();
     expect(normalizeContentSid(CONTENT_SID + "0")).toBeNull();
+  });
+});
+
+describe("trial SMS templates", () => {
+  it("maps each event to the predefined template closest to it", () => {
+    expect(smsTrialTemplate("appointment_rescheduled")).toBe("sms_appointment_reminders");
+    expect(smsTrialTemplate("reminder_1h")).toBe("sms_appointment_reminders");
+    expect(smsTrialTemplate("payment_confirmed")).toBe("sms_order_confirmation");
+    expect(smsTrialTemplate("refund_completed")).toBe("sms_customer_support");
+    expect(smsTrialTemplate("visit_thanks")).toBe("sms_feedback_surveys");
+  });
+
+  it("falls back to the neutral support template for anything unmapped", () => {
+    // An event with no close match must still say something harmless rather
+    // than borrow appointment wording it cannot honour.
+    expect(smsTrialTemplate("generic")).toBe("sms_customer_support");
+    expect(smsTrialTemplate(undefined)).toBe("sms_customer_support");
+    // `toString` is an own property of no object here — the map is consulted
+    // as data, never as a prototype chain.
+    expect(smsTrialTemplate("toString")).toBe("sms_customer_support");
+  });
+});
+
+describe("SMS configuration status", () => {
+  it("needs both credentials and a sender, and never echoes the number", () => {
+    expect(smsStatus({})).toEqual({
+      credentials: false,
+      sender: { present: false, tail: null },
+      configured: false,
+      trialFallback: true,
+    });
+
+    const partway = smsStatus({
+      TWILIO_ACCOUNT_SID: "ACtest123",
+      TWILIO_AUTH_TOKEN: "authtoken",
+    });
+    expect(partway.configured).toBe(false);
+
+    const ready = smsStatus({
+      TWILIO_ACCOUNT_SID: "ACtest123",
+      TWILIO_AUTH_TOKEN: "authtoken",
+      TWILIO_FROM: "+17372508034",
+    });
+    expect(ready).toEqual({
+      credentials: true,
+      sender: { present: true, tail: "8034" },
+      configured: true,
+      trialFallback: true,
+    });
+    expect(JSON.stringify(ready)).not.toContain("173725");
+  });
+
+  it("treats a blank sender as unconfigured", () => {
+    expect(
+      smsStatus({
+        TWILIO_ACCOUNT_SID: "ACtest123",
+        TWILIO_AUTH_TOKEN: "authtoken",
+        TWILIO_FROM: "   ",
+      }).configured,
+    ).toBe(false);
   });
 });
 
