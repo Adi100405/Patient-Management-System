@@ -300,7 +300,7 @@ async function main() {
   const daysAgo = (count: number) => {
     const date = new Date();
     date.setDate(date.getDate() - count);
-    return date.toISOString().slice(0, 10);
+    return localDate(date);
   };
 
   await db.insert(appointments).values([

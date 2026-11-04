@@ -9,6 +9,7 @@ import { blocksForDoctor } from "@/lib/availability";
 import { requireRole } from "@/lib/session";
 import { clinicNow } from "@/lib/slots";
 import { blocksConflict, streamSpacing, type ScheduleBlock } from "@/lib/schedule";
+import { formatDate } from "@/lib/utils";
 
 export type AvailabilityState = {
   error?: string;
@@ -45,6 +46,16 @@ export async function addAvailability(
 
   const data = parsed.data;
   const db = getDb();
+
+  // A dated block on a day that has already gone would never be bookable, so
+  // it is refused rather than quietly published as dead availability.
+  const today = clinicNow().date;
+  const pastDate = data.dates.find((date) => date < today);
+  if (pastDate) {
+    return {
+      error: `${formatDate(pastDate)} has already passed. Pick today or a later date.`,
+    };
+  }
 
   const candidate: ScheduleBlock = {
     id: -1,

@@ -11,6 +11,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { MAX_BLOCK_DATES, type SchedulingType } from "@/lib/schedule";
+import { clinicNow } from "@/lib/slots";
 import { cn, formatDate, formatTime } from "@/lib/utils";
 
 const DAYS = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"];
@@ -209,7 +210,7 @@ export function AvailabilityManager({
                 id="dateDraft"
                 type="date"
                 value={draft}
-                min={new Date().toISOString().slice(0, 10)}
+                min={clinicNow().date}
                 onChange={(event) => setDraft(event.target.value)}
                 onKeyDown={(event) => {
                   if (event.key !== "Enter") return;
