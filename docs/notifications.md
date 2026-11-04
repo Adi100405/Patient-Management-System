@@ -170,6 +170,14 @@ redeploy.
 stored, so a sid copied from the Twilio console can be checked before it is
 activated.
 
+Pass `"channel": "sms"` to send one SMS instead, through the same transport the
+appointment events use — so the answer shows the trial fallback in action
+(`degraded: true` plus the `trialTemplate` Twilio chose) rather than claiming the
+clinic's text was delivered. `text` is optional and defaults to a neutral
+sentence; `kind` picks which event's template the trial maps to. `from` applies
+to WhatsApp only, because the SMS sender comes from the deployment's own
+configuration.
+
 ### Pointing the app at a template without a redeploy
 
 The Twilio credentials stay in the environment. The *Content Template sid* does
