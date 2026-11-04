@@ -1,8 +1,8 @@
 import { NextResponse } from "next/server";
 import { createResendChannel } from "@/lib/notifications/channels/resend";
+import { smsStatus } from "@/lib/notifications/channels/sms";
 import {
   normalizeContentSid,
-  smsStatus,
   whatsappStatus,
 } from "@/lib/notifications/channels/twilio";
 import { loadWhatsappSettings } from "@/lib/notifications/settings";

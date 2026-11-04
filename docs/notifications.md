@@ -40,7 +40,7 @@ Key files:
 | `lib/notifications/retry-policy.ts` | `MAX_ATTEMPTS` and the backoff table. |
 | `lib/notifications/reminders.ts` | Reminder sweep (24h / 1h before the visit). |
 | `lib/notifications/care.ts` | Post-visit care sweep (thank-you, follow-up prompt). |
-| `lib/notifications/channels/` | Transports: `resend.ts`, `twilio.ts` (SMS and WhatsApp), `log.ts`. |
+| `lib/notifications/channels/` | Transports: `resend.ts`, `vonage.ts`, `twilio.ts` (SMS and WhatsApp), `sms.ts` (picks the SMS provider), `log.ts`. |
 
 ## Channels
 
@@ -71,13 +71,20 @@ confirmed, rescheduled, 24h/1h reminders) go through WhatsApp when it is fully
 configured; payment, refund, cancellation and care messages have no template
 and ride SMS. One transport per event either way, so a patient never gets both.
 
+SMS itself has two possible providers — **Vonage** or **Twilio** — and the
+ledger does not care which one carried a message. See
+[SMS providers](#sms-providers-vonage-or-twilio) below.
+
 | Env var | Required | Notes |
 |---|---|---|
-| `TWILIO_ACCOUNT_SID` | for WhatsApp or SMS | From the Twilio console. |
-| `TWILIO_AUTH_TOKEN` | for WhatsApp or SMS | Paired auth token. |
+| `TWILIO_ACCOUNT_SID` | for WhatsApp or Twilio SMS | From the Twilio console. |
+| `TWILIO_AUTH_TOKEN` | for WhatsApp or Twilio SMS | Paired auth token. |
 | `TWILIO_WHATSAPP_FROM` | for WhatsApp | The WhatsApp sender, E.164 (the free trial auto-assigns one; production uses a registered sender). |
 | `TWILIO_WHATSAPP_CONTENT_SID` | for WhatsApp | The approved Content Template sid, `HX` + 32 hex chars — anything else is treated as unconfigured. The template must use `{{1}}` for the visit date and `{{2}}` for the visit time. |
-| `TWILIO_FROM` | for SMS | An SMS-capable number or messaging service, E.164. Carries every kind without a WhatsApp template. |
+| `TWILIO_FROM` | for Twilio SMS | An SMS-capable number or messaging service, E.164. Carries every kind without a WhatsApp template. |
+| `VONAGE_API_KEY` | for Vonage SMS | From the Vonage dashboard. |
+| `VONAGE_API_SECRET` | for Vonage SMS | The paired secret. |
+| `VONAGE_FROM` | for Vonage SMS | The sender: a number in E.164 (digits, no leading `+`) or an alphanumeric sender ID. A number is the safe choice on a free account — an alphanumeric ID has to be registered for the destination country, and India requires DLT registration. |
 
 WhatsApp setup (console → **Messaging → Try it out → Send a WhatsApp message**):
 
@@ -94,12 +101,49 @@ The sid is read forgivingly: surrounding whitespace, matching quotes, a
 shapes a copy from the console's API snippet can take. Anything else counts as
 unconfigured.
 
-### Trial accounts: predefined SMS templates
+### SMS providers: Vonage or Twilio
 
-A trial Twilio account cannot send a free-form SMS at all. The Messages API
-answers `572006 Invalid template name` unless `Body` is *exactly* the name of
-one of Twilio's predefined templates, so the only text a trial can deliver is
-Twilio's own — always suffixed `Test message from Twilio.`
+SMS is one channel with two possible providers, and the ledger's channel column
+is `email | sms | whatsapp` — so switching provider needs no schema change and
+no migration. The transport is chosen by what the environment carries, and
+**Vonage wins when both are configured**.
+
+| Provider | Trial account | Free-form body |
+|---|---|---|
+| **Vonage** | Yes — sends only to the registered number and four verified test numbers, and appends `[FREE SMS DEMO, TEST MESSAGE]` to the body | **Yes.** The clinic's own text reaches the handset. |
+| **Twilio** | Yes — but a free-form body is refused outright with `572006`; only the name of one of Twilio's predefined templates is accepted | Only on a paid account. |
+
+That difference is the whole reason Vonage exists here: on a free Twilio
+account the clinic's message never reaches the patient, while a free Vonage
+account carries it.
+
+Vonage's wire format is one form-encoded POST to `rest.nexmo.com/sms/json`
+carrying the API key, the API secret, the sender, the recipient and the text —
+no SDK and no JWT. Numbers go out as bare digits, and a message containing `₹`
+or an em dash is declared as `unicode` rather than plain GSM. Vonage answers
+HTTP 200 even when it refuses a message, so the refusal is in the body: a
+per-message `status` other than `"0"`, or a top-level `error-code` for an
+authentication failure. Both are thrown, so the ledger records the failure
+instead of claiming a delivery.
+
+`/api/notifications/status` reports which provider would carry the next SMS:
+
+```json
+"sms": { "provider": "vonage", "configured": true, "sender": { "tail": "0000" },
+         "trialFallback": false }
+```
+
+`trialFallback` is true only for Twilio: it marks the one case where a message
+may go out as one of Twilio's predefined templates instead of the clinic's text.
+
+### Trial accounts: predefined SMS templates (Twilio only)
+
+This section is about the **Twilio** transport. On a Twilio trial account a
+free-form SMS body is refused outright: the Messages API answers `572006
+Invalid template name` unless `Body` is *exactly* the name of one of Twilio's
+predefined templates, so the only text a trial can deliver is Twilio's own —
+always suffixed `Test message from Twilio.` (A Vonage trial has no such limit;
+see [SMS providers](#sms-providers-vonage-or-twilio).)
 
 The transport keeps writing the clinic's real message and treats `572006` as
 "this account is on trial": the send is retried once with the predefined
@@ -171,12 +215,13 @@ stored, so a sid copied from the Twilio console can be checked before it is
 activated.
 
 Pass `"channel": "sms"` to send one SMS instead, through the same transport the
-appointment events use — so the answer shows the trial fallback in action
-(`degraded: true` plus the `trialTemplate` Twilio chose) rather than claiming the
-clinic's text was delivered. `text` is optional and defaults to a neutral
-sentence; `kind` picks which event's template the trial maps to. `from` applies
-to WhatsApp only, because the SMS sender comes from the deployment's own
-configuration.
+appointment events use — whichever provider is configured. The answer names the
+provider, and on a trial Twilio account it shows the predefined-template
+fallback in action (`degraded: true` plus the `trialTemplate` Twilio chose)
+rather than claiming the clinic's text was delivered. `text` is optional and
+defaults to a neutral sentence; `kind` picks which event's template the Twilio
+trial maps to. `from` applies to WhatsApp only, because each SMS provider reads
+its sender from the deployment's own configuration.
 
 ### Pointing the app at a template without a redeploy
 

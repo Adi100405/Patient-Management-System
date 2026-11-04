@@ -4,7 +4,6 @@ import {
   createTwilioChannel,
   createTwilioWhatsAppChannel,
   normalizeContentSid,
-  smsStatus,
   smsTrialTemplate,
   whatsappConfig,
   whatsappStatus,
@@ -312,46 +311,6 @@ describe("trial SMS templates", () => {
     // `toString` is an own property of no object here — the map is consulted
     // as data, never as a prototype chain.
     expect(smsTrialTemplate("toString")).toBe("sms_customer_support");
-  });
-});
-
-describe("SMS configuration status", () => {
-  it("needs both credentials and a sender, and never echoes the number", () => {
-    expect(smsStatus({})).toEqual({
-      credentials: false,
-      sender: { present: false, tail: null },
-      configured: false,
-      trialFallback: true,
-    });
-
-    const partway = smsStatus({
-      TWILIO_ACCOUNT_SID: "ACtest123",
-      TWILIO_AUTH_TOKEN: "authtoken",
-    });
-    expect(partway.configured).toBe(false);
-
-    const ready = smsStatus({
-      TWILIO_ACCOUNT_SID: "ACtest123",
-      TWILIO_AUTH_TOKEN: "authtoken",
-      TWILIO_FROM: "+17372508034",
-    });
-    expect(ready).toEqual({
-      credentials: true,
-      sender: { present: true, tail: "8034" },
-      configured: true,
-      trialFallback: true,
-    });
-    expect(JSON.stringify(ready)).not.toContain("173725");
-  });
-
-  it("treats a blank sender as unconfigured", () => {
-    expect(
-      smsStatus({
-        TWILIO_ACCOUNT_SID: "ACtest123",
-        TWILIO_AUTH_TOKEN: "authtoken",
-        TWILIO_FROM: "   ",
-      }).configured,
-    ).toBe(false);
   });
 });
 

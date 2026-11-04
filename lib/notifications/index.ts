@@ -1,6 +1,7 @@
 import { logChannel } from "./channels/log";
 import { createResendChannel } from "./channels/resend";
-import { createTwilioChannel, createTwilioWhatsAppChannel } from "./channels/twilio";
+import { createSmsChannel } from "./channels/sms";
+import { createTwilioWhatsAppChannel } from "./channels/twilio";
 import { dispatchNotification, retryDueNotifications } from "./dispatch";
 import { loadWhatsappSettings } from "./settings";
 import { dbNotificationStore, type NotificationStore } from "./store";
@@ -35,7 +36,7 @@ function channelFor(name: NotificationChannelName): NotificationChannel | null {
     case "email":
       return getNotificationChannel();
     case "sms":
-      return createTwilioChannel();
+      return createSmsChannel();
     case "whatsapp":
       return createTwilioWhatsAppChannel();
     default:

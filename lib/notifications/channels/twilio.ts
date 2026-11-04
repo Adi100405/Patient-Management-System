@@ -201,8 +201,8 @@ function isTrialTemplateRejection(status: number, body: string): boolean {
   }
 }
 
-/** What the deployment can see of the SMS setup, without any secrets. */
-export type SmsStatus = {
+/** What the deployment can see of the Twilio SMS setup, without any secrets. */
+export type TwilioSmsStatus = {
   credentials: boolean;
   sender: { present: boolean; tail: string | null };
   configured: boolean;
@@ -213,9 +213,9 @@ export type SmsStatus = {
   trialFallback: boolean;
 };
 
-export function smsStatus(
+export function twilioSmsStatus(
   env: Record<string, string | undefined> = process.env,
-): SmsStatus {
+): TwilioSmsStatus {
   const sender = env.TWILIO_FROM?.trim() || null;
   const credentials = Boolean(env.TWILIO_ACCOUNT_SID && env.TWILIO_AUTH_TOKEN);
 

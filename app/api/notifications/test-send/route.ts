@@ -1,8 +1,7 @@
 import { NextResponse } from "next/server";
+import { createSmsChannel, smsStatus } from "@/lib/notifications/channels/sms";
 import {
-  createTwilioChannel,
   normalizeContentSid,
-  smsStatus,
   whatsappConfig,
 } from "@/lib/notifications/channels/twilio";
 import { loadWhatsappSettings } from "@/lib/notifications/settings";
@@ -163,9 +162,10 @@ export async function POST(request: Request) {
 }
 
 /**
- * One SMS through the real transport. A trial account will refuse the free-form
- * body (`572006`) and the transport retries with a predefined template; the
- * answer says so instead of implying the clinic's text was delivered.
+ * One SMS through the real transport. On a trial Twilio account the free-form
+ * body is refused (`572006`) and the transport retries with a predefined
+ * template; the answer says so instead of implying the clinic's text was
+ * delivered. Vonage carries the text as written and never degrades.
  */
 async function sendTestSms(body: SendRequest) {
   const status = smsStatus(process.env);
@@ -173,7 +173,7 @@ async function sendTestSms(body: SendRequest) {
     return NextResponse.json(
       {
         error:
-          "Twilio SMS is not configured on this deployment. It needs TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN and TWILIO_FROM.",
+          "SMS is not configured on this deployment. It needs Vonage (VONAGE_API_KEY, VONAGE_API_SECRET, VONAGE_FROM) or Twilio (TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN, TWILIO_FROM).",
       },
       { status: 400 },
     );
@@ -187,7 +187,7 @@ async function sendTestSms(body: SendRequest) {
     );
   }
 
-  const channel = createTwilioChannel();
+  const channel = createSmsChannel();
   if (!channel) {
     return NextResponse.json(
       { error: "No SMS transport is configured on this deployment." },
@@ -207,6 +207,7 @@ async function sendTestSms(body: SendRequest) {
       {
         ok: true,
         channel: "sms",
+        provider: status.provider,
         messageSid: result?.providerRef ?? null,
         /** Twilio's predefined template, when the trial account forced one. */
         trialTemplate: result?.trialTemplate ?? null,
@@ -219,7 +220,8 @@ async function sendTestSms(body: SendRequest) {
       {
         ok: false,
         channel: "sms",
-        error: error instanceof Error ? error.message : "The Twilio request failed.",
+        provider: status.provider,
+        error: error instanceof Error ? error.message : "The SMS request failed.",
       },
       { status: 502, headers: { "cache-control": "no-store" } },
     );
