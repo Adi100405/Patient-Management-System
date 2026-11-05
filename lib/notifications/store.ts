@@ -10,17 +10,25 @@ import type { NotificationChannelName, NotificationStatus } from "./types";
  * of a live database.
  */
 
+/**
+ * The channel a ledger row was sent on.
+ *
+ * `whatsapp` is legacy: the WhatsApp transport was removed, so no new row can
+ * carry it, but rows written before the removal still do. The retry sweep
+ * reads them and finds no transport for them, which is the honest outcome —
+ * there is no longer a way to send that message.
+ */
+export type LedgerChannel = NotificationChannelName | "whatsapp";
+
 export type NotificationRecord = {
   id: number;
   kind: string;
-  channel: NotificationChannelName;
+  channel: LedgerChannel;
   recipient: string;
   subject: string | null;
   body: string;
   /** HTML rendering of the same message; null for SMS and text-only sends. */
   htmlBody: string | null;
-  /** Content Template variables for a templated WhatsApp send; null otherwise. */
-  contentVariables: Record<string, string> | null;
   status: NotificationStatus;
   attempts: number;
 };
@@ -32,8 +40,6 @@ export type NotificationDraft = {
   subject: string | null;
   body: string;
   htmlBody: string | null;
-  /** Content Template variables for a templated WhatsApp send; null otherwise. */
-  contentVariables: Record<string, string> | null;
   /** Null when the message should always be sent, never deduplicated. */
   idempotencyKey: string | null;
 };
@@ -61,7 +67,6 @@ function toRecord(row: typeof notifications.$inferSelect): NotificationRecord {
     subject: row.subject,
     body: row.body,
     htmlBody: row.htmlBody,
-    contentVariables: row.contentVariables,
     status: row.status,
     attempts: row.attempts,
   };
@@ -83,7 +88,6 @@ export const dbNotificationStore: NotificationStore = {
         subject: draft.subject,
         body: draft.body,
         htmlBody: draft.htmlBody,
-        contentVariables: draft.contentVariables,
         status: "queued",
         attempts: 1,
         idempotencyKey: draft.idempotencyKey,

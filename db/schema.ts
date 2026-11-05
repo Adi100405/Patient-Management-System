@@ -1,6 +1,7 @@
 import { sql } from "drizzle-orm";
 import {
   boolean,
+  check,
   index,
   integer,
   jsonb,
@@ -14,6 +15,16 @@ import {
 } from "drizzle-orm/pg-core";
 
 export const roleEnum = pgEnum("role", ["patient", "doctor"]);
+
+/**
+ * How a schedule block turns its window into bookable positions.
+ *
+ * Wave: a repeated visit slot, so the capacity counts patients per slot.
+ * Stream: a continuous run of appointments, so the capacity counts patients
+ * in the window and the window is divided into that many positions.
+ */
+export const schedulingTypeEnum = pgEnum("scheduling_type", ["wave", "stream"]);
+
 export const appointmentStatusEnum = pgEnum("appointment_status", [
   "booked",
   "completed",
@@ -70,20 +81,76 @@ export const doctors = pgTable("doctors", {
   bio: text("bio"),
 });
 
-export const availability = pgTable("availability", {
-  id: serial("id").primaryKey(),
-  doctorId: integer("doctor_id")
-    .notNull()
-    .references(() => doctors.id, { onDelete: "cascade" }),
-  /** 0 = Sunday ... 6 = Saturday */
-  dayOfWeek: integer("day_of_week").notNull(),
-  /** "09:00" */
-  startTime: text("start_time").notNull(),
-  /** "13:00" */
-  endTime: text("end_time").notNull(),
-  slotMinutes: integer("slot_minutes").notNull().default(30),
-  isActive: boolean("is_active").notNull().default(true),
-});
+/**
+ * One schedule block: the window a doctor publishes, how it turns into
+ * bookable positions, and when it applies.
+ *
+ * A block is either weekly or date-based, never both: a weekly block carries a
+ * weekday and a date-based block carries rows in `availability_dates`. One date
+ * in that list makes the block non-recurring; several make it a recurring
+ * series.
+ */
+export const availability = pgTable(
+  "availability",
+  {
+    id: serial("id").primaryKey(),
+    doctorId: integer("doctor_id")
+      .notNull()
+      .references(() => doctors.id, { onDelete: "cascade" }),
+    /** How the window turns into bookable positions. */
+    schedulingType: schedulingTypeEnum("scheduling_type").notNull().default("wave"),
+    /** 0 = Sunday ... 6 = Saturday. Null means the block follows an explicit date list. */
+    dayOfWeek: integer("day_of_week"),
+    /** "09:00" */
+    startTime: text("start_time").notNull(),
+    /** "13:00" */
+    endTime: text("end_time").notNull(),
+    /**
+     * Wave: the length of one visit, so the next patient starts when it ends.
+     * Stream: the derived distance between two positions, which is the window
+     * divided by the capacity — a stream never asks the doctor for a length.
+     */
+    slotMinutes: integer("slot_minutes").notNull().default(30),
+    /** Wave: patients per slot. Stream: patients in the window. */
+    capacity: integer("capacity").notNull().default(1),
+    isActive: boolean("is_active").notNull().default(true),
+  },
+  (table) => [
+    check("availability_capacity_positive", sql`${table.capacity} >= 1`),
+  ],
+);
+
+/**
+ * The explicit dates a date-based block opens on. A weekly block has no rows
+ * here; a block with one row is non-recurring and a block with several is a
+ * recurring series.
+ */
+export const availabilityDates = pgTable(
+  "availability_dates",
+  {
+    availabilityId: integer("availability_id")
+      .notNull()
+      .references(() => availability.id, { onDelete: "cascade" }),
+    /** "2026-11-12" */
+    date: text("date").notNull(),
+  },
+  (table) => [
+    uniqueIndex("availability_dates_block_date_unique").on(table.availabilityId, table.date),
+    index("availability_dates_date_idx").on(table.date),
+  ],
+);
+
+export type AvailabilityDate = typeof availabilityDates.$inferSelect;
+
+/**
+ * The partial unique index that enforces capacity.
+ *
+ * Seats are numbered from one within a slot, so the index is what stops a
+ * doctor from seeing more patients in a wave slot than the slot holds. Cancelled
+ * appointments leave the index, so a cancelled booking returns its seat to the
+ * pool without anybody having to release it by hand.
+ */
+export const BOOKED_SEAT_INDEX = "appointments_booked_seat_unique";
 
 export const appointments = pgTable(
   "appointments",
@@ -102,18 +169,25 @@ export const appointments = pgTable(
     appointmentDate: text("appointment_date").notNull(),
     /** "10:30" */
     appointmentTime: text("appointment_time").notNull(),
+    /**
+     * Which seat in the slot this patient holds, numbered from one. A wave
+     * slot has as many seats as its capacity; a stream position has exactly
+     * one.
+     */
+    seatNumber: integer("seat_number").notNull().default(1),
     status: appointmentStatusEnum("status").notNull().default("booked"),
     reason: text("reason"),
     createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
   },
   (table) => [
     /**
-     * A doctor cannot have two active bookings for the same slot. Cancelled
-     * appointments are excluded so the slot becomes bookable again.
+     * A doctor cannot have two active bookings in the same seat. Cancelled
+     * appointments are excluded so the seat becomes bookable again.
      */
-    uniqueIndex("appointments_booked_slot_unique")
-      .on(table.doctorId, table.appointmentDate, table.appointmentTime)
+    uniqueIndex(BOOKED_SEAT_INDEX)
+      .on(table.doctorId, table.appointmentDate, table.appointmentTime, table.seatNumber)
       .where(sql`${table.status} = 'booked'`),
+    check("appointments_seat_positive", sql`${table.seatNumber} >= 1`),
     /** Dashboards filter a doctor's or patient's appointments by date range. */
     index("appointments_doctor_date_idx").on(table.doctorId, table.appointmentDate),
     index("appointments_patient_date_idx").on(table.patientId, table.appointmentDate),
@@ -276,6 +350,14 @@ export const careFollowUps = pgTable("care_follow_ups", {
 export type CareFollowUp = typeof careFollowUps.$inferSelect;
 export type CareFollowUpKind = CareFollowUp["kind"];
 
+/**
+ * The channels a ledger row can carry.
+ *
+ * `whatsapp` is legacy: the WhatsApp transport was removed, so no new row can
+ * carry it, but rows written before the removal still do. The value stays in
+ * the enum so that history keeps reading back — dropping it would need a
+ * migration that rewrites rows the ledger exists to preserve.
+ */
 export const notificationChannelEnum = pgEnum("notification_channel", ["email", "sms", "whatsapp"]);
 export const notificationStatusEnum = pgEnum("notification_status", [
   "queued",
@@ -309,9 +391,10 @@ export const notifications = pgTable("notifications", {
    */
   htmlBody: text("html_body"),
   /**
-   * Twilio Content Variables ({"1": …, "2": …}) for the templated WhatsApp
-   * send, stored like htmlBody so the retry sweep re-sends exactly what a
-   * first attempt carried. Null for SMS, email and any non-templated message.
+   * Legacy: the Twilio Content Variables ({"1": …, "2": …}) a templated
+   * WhatsApp send carried. The WhatsApp transport was removed, so nothing
+   * writes this column any more; the column stays so the rows that carry it
+   * keep their history.
    */
   contentVariables: jsonb("content_variables").$type<Record<string, string>>(),
   status: notificationStatusEnum("status").notNull().default("queued"),
@@ -364,12 +447,12 @@ export type NotificationPreferences = typeof notificationPreferences.$inferSelec
 /**
  * Operator-set notification configuration.
  *
- * A WhatsApp Content Template sid is an *identifier*, not a credential — the
- * Twilio auth token stays in the environment. Keeping the sid here means an
- * operator can point the deployment at the right template without waiting for
- * a redeploy, which matters on a hosting plan where environment changes only
- * reach the next build. Rows are written by the doctor-only settings endpoint;
- * nothing else in the app may write them.
+ * Legacy: this table held the WhatsApp Content Template sid and sender, so an
+ * operator could point the deployment at the right template without a
+ * redeploy. The WhatsApp transport was removed and nothing reads or writes the
+ * table now; it stays so the rows it holds keep their history. Dropping it is
+ * a schema change with no runtime benefit, so it waits for a deliberate
+ * migration.
  */
 export const notificationSettings = pgTable("notification_settings", {
   key: text("key").primaryKey(),

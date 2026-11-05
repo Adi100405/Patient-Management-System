@@ -1,5 +1,4 @@
-import { mobileChannelName, notify } from "./index";
-import { loadWhatsappSettings } from "./settings";
+import { notify } from "./index";
 import { appointmentMailContext } from "./context";
 import {
   appointmentCancelled,
@@ -56,16 +55,12 @@ async function deliver(
   const prefs = await preferencesForUser(ctx.patientUserId);
   const plan = channelsFor(prefs, { phone: ctx.patientPhone });
 
-  // The WhatsApp template can be pointed at another sid from the database, so
-  // the configuration is refreshed before the transport is chosen.
-  await loadWhatsappSettings();
-
-  // One transport carries the short message. The kinds the clinic's approved
-  // appointment template can say (booked, moved, reminder) go on WhatsApp when
-  // it is fully configured; payment, refund, cancellation and care messages
-  // have no template and ride SMS. The same consent either way: the patient
-  // opted into "mobile updates", not a specific network.
-  const mobile = content.whatsapp ? mobileChannelName() : "sms";
+  // One transport carries the short message: SMS. WhatsApp was a second mobile
+  // channel until it was removed — it needs a Meta-approved template, and the
+  // only template this project could use was a fixed one that ignored the
+  // appointment date, so a booking could have gone out with the wrong day on
+  // it. SMS carries the real text instead.
+  const mobile = "sms";
 
   // Per-channel idempotency keys: one ledger row per channel, so a duplicate
   // event can never double-send on either transport.
@@ -91,7 +86,6 @@ async function deliver(
             to: ctx.patientPhone ?? "",
             subject: "",
             text: content.sms,
-            contentVariables: content.whatsapp ?? null,
             meta: { kind: options.kind },
           },
           { channel: mobile, idempotencyKey: mobileKey },

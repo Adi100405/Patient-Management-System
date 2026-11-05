@@ -6,10 +6,12 @@ import { drizzle } from "drizzle-orm/neon-http";
 import {
   appointments,
   availability,
+  availabilityDates,
   doctors,
   patients,
   users,
 } from "../db/schema";
+import { streamSpacing } from "../lib/schedule";
 
 config({ path: ".env.local" });
 config({ path: ".env" });
@@ -24,6 +26,24 @@ if (!url) {
 const db = drizzle(neon(url));
 const PASSWORD = "password123";
 
+/**
+ * One published schedule block.
+ *
+ * A block is weekly (it names a weekday) or date-based (it lists the dates it
+ * opens on). One listed date is a single visit day; several are a recurring
+ * series.
+ */
+type BlockSeed = {
+  readonly schedulingType: "wave" | "stream";
+  /** 0 = Sunday ... 6 = Saturday. Null for a date-based block. */
+  readonly dayOfWeek: number | null;
+  readonly dates: readonly string[];
+  readonly startTime: string;
+  readonly endTime: string;
+  readonly slotMinutes: number;
+  readonly capacity: number;
+};
+
 type DoctorSeed = {
   email: string;
   fullName: string;
@@ -32,9 +52,71 @@ type DoctorSeed = {
   qualification: string;
   consultationFee: string;
   bio: string;
-  days: number[];
-  windows: { startTime: string; endTime: string }[];
+  blocks: BlockSeed[];
 };
+
+/** A wave: patients share a slot, so the capacity counts patients per slot. */
+function wave(
+  dayOfWeek: number,
+  startTime: string,
+  endTime: string,
+  capacity = 3,
+  slotMinutes = 30,
+): BlockSeed {
+  return {
+    schedulingType: "wave",
+    dayOfWeek,
+    dates: [],
+    startTime,
+    endTime,
+    slotMinutes,
+    capacity,
+  };
+}
+
+/**
+ * A stream: patients are spread through the window, so the capacity counts
+ * patients in the window and the spacing between them is derived.
+ */
+function stream(
+  dayOfWeek: number,
+  startTime: string,
+  endTime: string,
+  capacity: number,
+): BlockSeed {
+  return {
+    schedulingType: "stream",
+    dayOfWeek,
+    dates: [],
+    startTime,
+    endTime,
+    slotMinutes: streamSpacing(startTime, endTime, capacity),
+    capacity,
+  };
+}
+
+/** The same, but opening on an explicit list of dates. */
+function dated(
+  dates: readonly string[],
+  schedulingType: "wave" | "stream",
+  startTime: string,
+  endTime: string,
+  capacity: number,
+  slotMinutes = 30,
+): BlockSeed {
+  return {
+    schedulingType,
+    dayOfWeek: null,
+    dates,
+    startTime,
+    endTime,
+    slotMinutes:
+      schedulingType === "wave"
+        ? slotMinutes
+        : streamSpacing(startTime, endTime, capacity),
+    capacity,
+  };
+}
 
 const DOCTORS: DoctorSeed[] = [
   {
@@ -45,10 +127,14 @@ const DOCTORS: DoctorSeed[] = [
     qualification: "MBBS, MD (Cardiology)",
     consultationFee: "800",
     bio: "Interventional cardiologist focused on preventive heart care and post-surgery follow-ups.",
-    days: [1, 2, 3, 4, 5],
-    windows: [
-      { startTime: "09:00", endTime: "13:00" },
-      { startTime: "16:00", endTime: "19:00" },
+    blocks: [
+      wave(1, "09:00", "13:00", 3),
+      wave(3, "09:00", "13:00", 3),
+      stream(5, "16:00", "19:00", 5),
+      // A recurring series on Tuesdays and a single visit day on a Saturday,
+      // so both kinds of dated block are there to try.
+      dated(upcomingDates(2, 3), "wave", "10:00", "12:00", 2),
+      dated(upcomingDates(6, 1), "stream", "09:00", "11:00", 4),
     ],
   },
   {
@@ -59,8 +145,12 @@ const DOCTORS: DoctorSeed[] = [
     qualification: "MBBS, MD (Dermatology)",
     consultationFee: "600",
     bio: "Treats acne, pigmentation and hair loss with a focus on long-term skin health.",
-    days: [1, 3, 5, 6],
-    windows: [{ startTime: "10:00", endTime: "14:00" }],
+    blocks: [
+      wave(1, "10:00", "14:00", 2),
+      wave(3, "10:00", "14:00", 2),
+      stream(5, "10:00", "14:00", 4),
+      wave(6, "10:00", "13:00", 3),
+    ],
   },
   {
     email: "vikram.iyer@demo.com",
@@ -70,8 +160,7 @@ const DOCTORS: DoctorSeed[] = [
     qualification: "MBBS, MS (Orthopedics)",
     consultationFee: "900",
     bio: "Sports injury and joint replacement specialist with 15 years of surgical experience.",
-    days: [2, 4, 6],
-    windows: [{ startTime: "09:30", endTime: "13:30" }],
+    blocks: [wave(2, "09:30", "13:30", 2), wave(4, "09:30", "13:30", 2), wave(6, "09:30", "12:30", 2)],
   },
   {
     email: "sneha.kapoor@demo.com",
@@ -81,8 +170,7 @@ const DOCTORS: DoctorSeed[] = [
     qualification: "MBBS, DCH",
     consultationFee: "500",
     bio: "Child health specialist covering vaccinations, growth tracking and newborn care.",
-    days: [1, 2, 3, 4, 5],
-    windows: [{ startTime: "09:00", endTime: "12:00" }],
+    blocks: [wave(1, "09:00", "12:00", 4), wave(2, "09:00", "12:00", 4), wave(3, "09:00", "12:00", 4)],
   },
   {
     email: "rohan.gupta@demo.com",
@@ -92,10 +180,13 @@ const DOCTORS: DoctorSeed[] = [
     qualification: "MBBS, MD (Internal Medicine)",
     consultationFee: "400",
     bio: "First point of contact for fevers, infections and routine health check-ups.",
-    days: [1, 2, 3, 4, 5, 6],
-    windows: [
-      { startTime: "08:30", endTime: "12:30" },
-      { startTime: "17:00", endTime: "20:00" },
+    blocks: [
+      wave(1, "08:30", "12:30", 3),
+      wave(2, "08:30", "12:30", 3),
+      wave(3, "08:30", "12:30", 3),
+      wave(4, "08:30", "12:30", 3),
+      wave(5, "08:30", "12:30", 3),
+      stream(6, "17:00", "20:00", 6),
     ],
   },
   {
@@ -106,10 +197,32 @@ const DOCTORS: DoctorSeed[] = [
     qualification: "MBBS, DM (Neurology)",
     consultationFee: "1000",
     bio: "Specialises in migraine, epilepsy and movement disorders.",
-    days: [3, 5],
-    windows: [{ startTime: "11:00", endTime: "15:00" }],
+    blocks: [wave(3, "11:00", "15:00", 2), wave(5, "11:00", "15:00", 2)],
   },
 ];
+
+/** The next `count` dates that fall on the given weekday, starting tomorrow. */
+function upcomingDates(dayOfWeek: number, count: number): string[] {
+  const dates: string[] = [];
+  const cursor = new Date();
+  cursor.setHours(12, 0, 0, 0);
+  cursor.setDate(cursor.getDate() + 1);
+
+  while (dates.length < count) {
+    if (cursor.getDay() === dayOfWeek) dates.push(localDate(cursor));
+    cursor.setDate(cursor.getDate() + 1);
+  }
+
+  return dates;
+}
+
+/** "2026-11-12" in the machine's own calendar, not UTC's. */
+function localDate(date: Date): string {
+  const year = date.getFullYear();
+  const month = String(date.getMonth() + 1).padStart(2, "0");
+  const day = String(date.getDate()).padStart(2, "0");
+  return `${year}-${month}-${day}`;
+}
 
 async function main() {
   console.log("Clearing existing demo data…");
@@ -161,15 +274,24 @@ async function main() {
 
     doctorIds.push(doctor!.id);
 
-    for (const day of seed.days) {
-      for (const window of seed.windows) {
-        await db.insert(availability).values({
+    for (const block of seed.blocks) {
+      const [created] = await db
+        .insert(availability)
+        .values({
           doctorId: doctor!.id,
-          dayOfWeek: day,
-          startTime: window.startTime,
-          endTime: window.endTime,
-          slotMinutes: 30,
-        });
+          schedulingType: block.schedulingType,
+          dayOfWeek: block.dayOfWeek,
+          startTime: block.startTime,
+          endTime: block.endTime,
+          slotMinutes: block.slotMinutes,
+          capacity: block.capacity,
+        })
+        .returning({ id: availability.id });
+
+      if (block.dates.length > 0) {
+        await db.insert(availabilityDates).values(
+          block.dates.map((date) => ({ availabilityId: created!.id, date })),
+        );
       }
     }
   }
@@ -178,7 +300,7 @@ async function main() {
   const daysAgo = (count: number) => {
     const date = new Date();
     date.setDate(date.getDate() - count);
-    return date.toISOString().slice(0, 10);
+    return localDate(date);
   };
 
   await db.insert(appointments).values([
@@ -187,6 +309,7 @@ async function main() {
       doctorId: doctorIds[0]!,
       appointmentDate: daysAgo(3),
       appointmentTime: "10:00",
+      seatNumber: 1,
       status: "completed",
       reason: "Routine cardiac check-up",
     },
@@ -194,7 +317,8 @@ async function main() {
       patientId: patient!.id,
       doctorId: doctorIds[0]!,
       appointmentDate: daysAgo(5),
-      appointmentTime: "16:30",
+      appointmentTime: "16:00",
+      seatNumber: 1,
       status: "no_show",
       reason: "Follow-up for palpitations",
     },

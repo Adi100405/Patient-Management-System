@@ -1,43 +1,36 @@
 import { NextResponse } from "next/server";
-import {
-  normalizeContentSid,
-  whatsappConfig,
-} from "@/lib/notifications/channels/twilio";
-import { loadWhatsappSettings } from "@/lib/notifications/settings";
+import { createSmsChannel, smsStatus } from "@/lib/notifications/channels/sms";
 import { getSession } from "@/lib/session";
 
 /**
- * Sends one template WhatsApp on demand, so a doctor can prove that *this
- * deployment* can reach Twilio without waiting for a patient to book.
+ * Sends one test SMS on demand, so a doctor can prove that *this deployment*
+ * can reach the patient without waiting for a real booking.
  *
- * It is deliberately an action, not a status read: it POSTs to Twilio and
- * reports exactly what Twilio said. The message carries the same two
- * placeholders the app's appointment templates use (visit date, visit time) and
- * nothing else — no patient name, no reason, no other health information.
+ * The message goes through the same transport the appointment events use, so a
+ * test exercises the same provider handling a real appointment message would
+ * get — including a trial Twilio account's predefined-template fallback, which
+ * is reported as `degraded: true` rather than pretending the clinic's text
+ * went out.
  *
- * `from` is optional and defaults to the configured WhatsApp sender. Overriding
- * it is useful on a trial account, where a template can be valid only from a
- * particular sender (the Sandbox number, for instance), and it lets an
- * operator compare senders without redeploying.
+ * The body is a neutral sentence or the caller's own `text`, never patient
+ * data.
  *
- * Doctor-only: this spends the account's trial message quota, so it must not be
+ * Doctor-only: this spends the account's message quota, so it must not be
  * callable by a patient.
  */
 export const dynamic = "force-dynamic";
 
 type SendRequest = {
+  /** The channel to send on. Only SMS exists; anything else is refused. */
+  channel?: string;
   to?: string;
-  from?: string;
-  /**
-   * A candidate Content Template sid, tried without being stored. It lets an
-   * operator check a sid from the Twilio console before activating it.
-   */
-  contentSid?: string;
+  /** SMS only: the body to try. A neutral test sentence by default. */
+  text?: string;
+  /** SMS only: which event the body stands in for, so the trial mapping matches. */
+  kind?: string;
 };
 
-function withWhatsappPrefix(value: string): string {
-  return value.startsWith("whatsapp:") ? value : `whatsapp:${value}`;
-}
+const DEFAULT_SMS_TEXT = "Medrella test SMS: this deployment can reach you.";
 
 export async function POST(request: Request) {
   const session = await getSession();
@@ -45,33 +38,42 @@ export async function POST(request: Request) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
 
-  const accountSid = process.env.TWILIO_ACCOUNT_SID;
-  const authToken = process.env.TWILIO_AUTH_TOKEN;
-  const runtime = await loadWhatsappSettings({ force: true });
-  const config = whatsappConfig(process.env, runtime);
-
   const body = (await request.json().catch(() => null)) as SendRequest | null;
 
-  const candidate = body?.contentSid ? normalizeContentSid(body.contentSid.trim()) : null;
-  if (body?.contentSid && !candidate) {
+  // WhatsApp was a second mobile channel and has been removed. Saying so is
+  // better than quietly sending an SMS to someone who asked for WhatsApp.
+  if (body?.channel && body.channel !== "sms") {
     return NextResponse.json(
       {
         error:
-          "That is not a Content Template sid. It must look like HX followed by 32 hex characters.",
+          'This endpoint sends SMS. WhatsApp is no longer a channel in this app — use {"channel":"sms"}.',
       },
       { status: 400 },
     );
   }
 
-  const contentSid = candidate ?? config.contentSid;
-  if (!accountSid || !authToken || !contentSid) {
+  return sendTestSms(body ?? {});
+}
+
+/**
+ * One SMS through the real transport. On a trial Twilio account the free-form
+ * body is refused (`572006`) and the transport retries with a predefined
+ * template; the answer says so instead of implying the clinic's text was
+ * delivered. Vonage carries the text as written and never degrades.
+ */
+async function sendTestSms(body: SendRequest) {
+  const status = smsStatus(process.env);
+  if (!status.configured) {
     return NextResponse.json(
-      { error: "Twilio WhatsApp is not configured on this deployment." },
+      {
+        error:
+          "SMS is not configured on this deployment. It needs Vonage (VONAGE_API_KEY, VONAGE_API_SECRET, VONAGE_FROM) or Twilio (TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN, TWILIO_FROM).",
+      },
       { status: 400 },
     );
   }
 
-  const to = body?.to?.trim();
+  const to = body.to?.trim();
   if (!to) {
     return NextResponse.json(
       { error: "A recipient `to` (E.164) is required." },
@@ -79,61 +81,41 @@ export async function POST(request: Request) {
     );
   }
 
-  const from = body?.from?.trim() || config.sender;
-  if (!from) {
+  const channel = createSmsChannel();
+  if (!channel) {
     return NextResponse.json(
-      { error: "No WhatsApp sender is configured; pass `from` explicitly." },
+      { error: "No SMS transport is configured on this deployment." },
       { status: 400 },
     );
   }
 
-  const form = new URLSearchParams({
-    To: withWhatsappPrefix(to),
-    From: withWhatsappPrefix(from),
-    ContentSid: contentSid,
-    ContentVariables: JSON.stringify({ "1": "5 Nov 2026", "2": "10:30" }),
-  });
-
   try {
-    const response = await fetch(
-      `https://api.twilio.com/2010-04-01/Accounts/${accountSid}/Messages.json`,
-      {
-        method: "POST",
-        headers: {
-          Authorization: `Basic ${Buffer.from(`${accountSid}:${authToken}`).toString("base64")}`,
-          "Content-Type": "application/x-www-form-urlencoded",
-        },
-        body: form.toString(),
-        signal: AbortSignal.timeout(15_000),
-        cache: "no-store",
-      },
-    );
-    const text = await response.text();
-    const payload = JSON.parse(text) as {
-      sid?: string;
-      status?: string;
-      error_code?: number;
-      message?: string;
-      body?: string;
-    };
+    const result = await channel.send({
+      to,
+      subject: "",
+      text: body.text?.trim() || DEFAULT_SMS_TEXT,
+      meta: { kind: body.kind?.trim() || "diagnostic" },
+    });
 
     return NextResponse.json(
       {
-        ok: response.ok,
-        httpStatus: response.status,
-        messageSid: payload.sid ?? null,
-        status: payload.status ?? null,
-        errorCode: payload.error_code ?? null,
-        error: payload.message ?? null,
-        rendered: payload.body ?? null,
+        ok: true,
+        channel: "sms",
+        provider: status.provider,
+        messageSid: result?.providerRef ?? null,
+        /** Twilio's predefined template, when the trial account forced one. */
+        trialTemplate: result?.trialTemplate ?? null,
+        degraded: Boolean(result?.trialTemplate),
       },
-      { status: response.ok ? 200 : 502, headers: { "cache-control": "no-store" } },
+      { headers: { "cache-control": "no-store" } },
     );
   } catch (error) {
     return NextResponse.json(
       {
         ok: false,
-        error: error instanceof Error ? error.message : "The Twilio request failed.",
+        channel: "sms",
+        provider: status.provider,
+        error: error instanceof Error ? error.message : "The SMS request failed.",
       },
       { status: 502, headers: { "cache-control": "no-store" } },
     );

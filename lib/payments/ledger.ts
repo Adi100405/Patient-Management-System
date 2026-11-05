@@ -1,6 +1,6 @@
 import { and, eq, ne } from "drizzle-orm";
 import { getDb } from "@/db";
-import { appointments, payments } from "@/db/schema";
+import { BOOKED_SEAT_INDEX, appointments, payments } from "@/db/schema";
 import { isUniqueViolation } from "@/lib/db-errors";
 import { sendPaymentConfirmation } from "@/lib/notifications/events";
 import { refundUnhonouredPayment } from "@/lib/refunds/service";
@@ -49,7 +49,7 @@ export async function confirmPayment(
 /**
  * A successful payment must leave the patient with a visit. If the hold was
  * released before the money settled (slow checkout, expired slot), the
- * appointment is reinstated — unless another patient has since taken the slot,
+ * appointment is reinstated — unless another patient has since taken the seat,
  * in which case the payment is refunded in full rather than double-booking the
  * doctor or keeping money for a visit that will not happen.
  */
@@ -61,7 +61,8 @@ async function restoreAppointment(appointmentId: number, paymentId: number) {
       .set({ status: "booked" })
       .where(and(eq(appointments.id, appointmentId), eq(appointments.status, "cancelled")));
   } catch (error) {
-    if (!isUniqueViolation(error, "appointments_booked_slot_unique")) throw error;
+    // The seat is gone: another patient took it while this checkout was open.
+    if (!isUniqueViolation(error, BOOKED_SEAT_INDEX)) throw error;
     await refundUnhonouredPayment(paymentId);
   }
 }

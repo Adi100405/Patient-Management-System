@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { notify, notifyWith } from "@/lib/notifications";
+import { channelFor, notify, notifyWith } from "@/lib/notifications";
 import { dispatchNotification, retryDueNotifications } from "@/lib/notifications/dispatch";
 import { MAX_ATTEMPTS, backoffFor } from "@/lib/notifications/retry-policy";
 import type {
@@ -38,7 +38,6 @@ class MemoryStore implements NotificationStore {
       subject: draft.subject,
       body: draft.body,
       htmlBody: draft.htmlBody,
-      contentVariables: draft.contentVariables ?? null,
       status: "queued",
       attempts: 1,
       idempotencyKey: draft.idempotencyKey,
@@ -215,28 +214,25 @@ describe("retryDueNotifications", () => {
     expect(retried?.html).toBe(rich.html);
   });
 
-  it("carries the Content Template variables across a retry so a templated WhatsApp send re-sends identically", async () => {
+  it("carries the SMS body across a retry so a re-sent message is identical", async () => {
     const store = new MemoryStore();
     const send = vi
       .fn<NotificationChannel["send"]>()
       .mockRejectedValueOnce(new Error("provider down"))
       .mockResolvedValueOnce({});
-    const templated: NotificationMessage = {
-      ...message,
-      contentVariables: { "1": "5 Nov 2026", "2": "10:30" },
-    };
 
     await dispatchNotification(
-      templated,
+      message,
       {
         kind: "booking_confirmed",
-        channel: "whatsapp",
-        idempotencyKey: "booking_confirmed:42:whatsapp",
+        channel: "sms",
+        idempotencyKey: "booking_confirmed:42:sms",
       },
       { store, channel: channel(send), now: t0 },
     );
-    // The ledger keeps the template's variables, not just the fallback text.
-    expect(store.rows[0]?.contentVariables).toEqual({ "1": "5 Nov 2026", "2": "10:30" });
+    // The ledger keeps the text the clinic meant to send, not just the body a
+    // fallback might have substituted.
+    expect(store.rows[0]?.body).toBe(message.text);
 
     await retryDueNotifications({
       store,
@@ -245,7 +241,7 @@ describe("retryDueNotifications", () => {
     });
 
     const retried = send.mock.calls.at(1)?.at(0);
-    expect(retried?.contentVariables).toEqual({ "1": "5 Nov 2026", "2": "10:30" });
+    expect(retried?.text).toBe(message.text);
   });
 
   it("stops retrying once the attempt cap is reached", async () => {
@@ -293,6 +289,39 @@ describe("retryDueNotifications", () => {
     });
 
     expect(outcome).toEqual({ retried: 0, sent: 0 });
+    expect(store.rows[0]?.status).toBe("failed");
+  });
+
+  it("never retries a ledger row from the removed WhatsApp channel", async () => {
+    const store = new MemoryStore();
+    const send = vi.fn<NotificationChannel["send"]>().mockResolvedValue({});
+
+    // A row written before the WhatsApp transport was removed.
+    store.rows.push({
+      id: 99,
+      kind: "booking_confirmed",
+      channel: "whatsapp",
+      recipient: "+919876543210",
+      subject: null,
+      body: "Medrella: appointment booked.",
+      htmlBody: null,
+      status: "failed",
+      attempts: 1,
+      idempotencyKey: "booking_confirmed:42:whatsapp",
+      providerRef: null,
+      nextAttemptAt: new Date(t0.getTime() - 1_000),
+    });
+
+    const outcome = await retryDueNotifications({
+      store,
+      resolveChannel: channelFor,
+      now: new Date(t0.getTime() + 24 * 60 * 60_000),
+    });
+
+    // There is no transport for that channel any more, so the row is left
+    // alone rather than being re-sent on a channel it was never addressed to.
+    expect(outcome).toEqual({ retried: 0, sent: 0 });
+    expect(send).not.toHaveBeenCalled();
     expect(store.rows[0]?.status).toBe("failed");
   });
 });

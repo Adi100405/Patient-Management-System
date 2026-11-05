@@ -1,12 +1,13 @@
 import { and, asc, desc, eq, gte, lt, ne, or, sql } from "drizzle-orm";
 import { AlertTriangle, Calendar, Clock, Users } from "lucide-react";
 import { getDb } from "@/db";
-import { appointments, availability, patients } from "@/db/schema";
+import { appointments, patients } from "@/db/schema";
 import { AppointmentActions } from "@/components/appointment-actions";
-import { AvailabilityManager } from "@/components/availability-manager";
+import { AvailabilityManager, type AvailabilityRow } from "@/components/availability-manager";
 import { CancelAppointment } from "@/components/cancel-appointment";
 import { Badge } from "@/components/ui/badge";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { blocksForDoctor } from "@/lib/availability";
 import type { CancelPreview } from "@/lib/cancel-preview";
 import { requireRole } from "@/lib/session";
 import { clinicClock, clinicNow, slotArrived } from "@/lib/slots";
@@ -164,17 +165,24 @@ export default async function DoctorDashboard() {
     .from(appointments)
     .where(eq(appointments.doctorId, session.profileId));
 
-  const windows = await db
-    .select({
-      id: availability.id,
-      dayOfWeek: availability.dayOfWeek,
-      startTime: availability.startTime,
-      endTime: availability.endTime,
-      slotMinutes: availability.slotMinutes,
-    })
-    .from(availability)
-    .where(and(eq(availability.doctorId, session.profileId), eq(availability.isActive, true)))
-    .orderBy(asc(availability.dayOfWeek), asc(availability.startTime));
+  const blocks = await blocksForDoctor(session.profileId);
+  const windows: AvailabilityRow[] = [...blocks].sort((a, b) => {
+    if (a.dayOfWeek !== b.dayOfWeek) {
+      if (a.dayOfWeek === null) return 1;
+      if (b.dayOfWeek === null) return -1;
+      return a.dayOfWeek - b.dayOfWeek;
+    }
+    return a.startTime.localeCompare(b.startTime);
+  }).map((block) => ({
+    id: block.id,
+    schedulingType: block.schedulingType,
+    dayOfWeek: block.dayOfWeek,
+    dates: block.dates,
+    startTime: block.startTime,
+    endTime: block.endTime,
+    slotMinutes: block.slotMinutes,
+    capacity: block.capacity,
+  }));
 
   const bookedPerWindow = await db
     .select({ availabilityId: appointments.availabilityId, total: sql<number>`count(*)::int` })
@@ -226,7 +234,7 @@ export default async function DoctorDashboard() {
 
       <Card>
         <CardHeader>
-          <CardTitle>Weekly availability</CardTitle>
+          <CardTitle>Availability</CardTitle>
           <p className="text-sm text-ink-500">
             Patients can only book inside these windows. Times are clinic time (IST).
           </p>

@@ -1,18 +1,34 @@
 import Link from "next/link";
 import { notFound } from "next/navigation";
-import { and, asc, eq, gte, lte } from "drizzle-orm";
+import { eq } from "drizzle-orm";
 import { Briefcase, CalendarClock, CalendarDays, GraduationCap, Wallet } from "lucide-react";
 import { getDb } from "@/db";
-import { appointments, availability, doctors } from "@/db/schema";
+import { doctors } from "@/db/schema";
 import { Badge } from "@/components/ui/badge";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { BookingPanel } from "@/components/booking-panel";
+import { blocksForDoctor } from "@/lib/availability";
 import { releaseExpiredPayments } from "@/lib/payments/expire";
+import { takenSeatsByTime } from "@/lib/seats";
 import { getSession } from "@/lib/session";
-import { availableSlots, buildSlots, upcomingDays } from "@/lib/slots";
+import { dayOption, clinicNow, upcomingDays, type DayOption } from "@/lib/slots";
+import { offersFor, openDates, type DatedBlock, type WeeklyBlock } from "@/lib/schedule";
 import { formatCurrency, formatDate, formatTime } from "@/lib/utils";
 
 export const dynamic = "force-dynamic";
+
+/** How far ahead a dated block may reach and still show up in the day picker. */
+const DATED_HORIZON_DAYS = 60;
+
+const WEEKDAYS = [
+  "Sunday",
+  "Monday",
+  "Tuesday",
+  "Wednesday",
+  "Thursday",
+  "Friday",
+  "Saturday",
+];
 
 export default async function DoctorProfilePage({
   params,
@@ -35,60 +51,48 @@ export default async function DoctorProfilePage({
   const [doctor] = await db.select().from(doctors).where(eq(doctors.id, doctorId)).limit(1);
   if (!doctor) notFound();
 
-  const windows = await db
-    .select()
-    .from(availability)
-    .where(and(eq(availability.doctorId, doctorId), eq(availability.isActive, true)))
-    .orderBy(asc(availability.dayOfWeek), asc(availability.startTime));
-
-  const days = upcomingDays(7);
-  const workingDays = days.filter((d) => windows.some((w) => w.dayOfWeek === d.dayOfWeek));
-
   const session = await getSession();
 
-  const bookedRows = workingDays.length
-    ? await db
-        .select({ date: appointments.appointmentDate, time: appointments.appointmentTime })
-        .from(appointments)
-        .where(
-          and(
-            eq(appointments.doctorId, doctorId),
-            eq(appointments.status, "booked"),
-            gte(appointments.appointmentDate, days[0]!.date),
-            lte(appointments.appointmentDate, days[days.length - 1]!.date),
-          ),
-        )
-    : [];
+  const blocks = await blocksForDoctor(doctorId);
+  const now = clinicNow();
+  const days = upcomingDays(7);
+  const horizon = upcomingDays(DATED_HORIZON_DAYS);
+  const horizonEnd = horizon[horizon.length - 1]?.date ?? now.date;
 
-  const bookedByDate = new Map<string, string[]>();
-  for (const row of bookedRows) {
-    bookedByDate.set(row.date, [...(bookedByDate.get(row.date) ?? []), row.time]);
+  // The dates a patient may book: the next seven days, plus any specific date
+  // the doctor opened further out.
+  const candidates = new Map<string, DayOption>();
+  for (const day of days) candidates.set(day.date, day);
+  for (const block of blocks) {
+    for (const date of block.dates) {
+      if (date < now.date || date > horizonEnd) continue;
+      if (!candidates.has(date)) candidates.set(date, dayOption(date));
+    }
   }
 
-  /** Working days with the slots a patient can actually pick right now. */
-  const dayOptions = workingDays.map((day) => {
-    const dayWindows = windows.filter((w) => w.dayOfWeek === day.dayOfWeek);
-    const times = availableSlots({
-      windows: dayWindows,
-      date: day.date,
-      bookedTimes: bookedByDate.get(day.date) ?? [],
-    });
-    return {
-      ...day,
-      times,
-      windows: dayWindows,
-    };
-  });
+  const orderedDays = openDates(
+    blocks,
+    [...candidates.values()].sort((a, b) => a.date.localeCompare(b.date)),
+  );
 
-  const WEEKDAYS = [
-    "Sunday",
-    "Monday",
-    "Tuesday",
-    "Wednesday",
-    "Thursday",
-    "Friday",
-    "Saturday",
-  ];
+  const taken = orderedDays.length
+    ? await takenSeatsByTime({
+        doctorId,
+        dateFrom: orderedDays[0]!.date,
+        dateTo: orderedDays[orderedDays.length - 1]!.date,
+      })
+    : new Map<string, Map<string, number>>();
+
+  /** Working days with the slots a patient can actually pick right now. */
+  const dayOptions = orderedDays.map((day) => ({
+    ...day,
+    offers: offersFor({
+      blocks,
+      date: day.date,
+      takenSeats: taken.get(day.date) ?? new Map<string, number>(),
+      now,
+    }),
+  }));
 
   // Everything the client picker needs, per day: its label and its free slots.
   // Built once here so switching days in the browser needs no server round
@@ -97,47 +101,71 @@ export default async function DoctorProfilePage({
     date: day.date,
     weekday: day.isToday ? "Today" : (WEEKDAYS[day.dayOfWeek]?.slice(0, 3) ?? ""),
     dayLabel: formatDate(day.date).replace(/^[A-Za-z]+,\s*/, ""),
-    slots: day.times.map((time) => ({
-      time,
-      availabilityId:
-        day.windows.find((w) => buildSlots(w).includes(time))?.id ?? day.windows[0]!.id,
-    })),
+    freeSeats: day.offers.reduce((sum, offer) => sum + offer.free, 0),
+    slots: day.offers
+      .filter((offer) => offer.free > 0)
+      .map((offer) => ({
+        time: offer.time,
+        availabilityId: offer.availabilityId,
+        schedulingType: offer.schedulingType,
+        seats: offer.seats,
+        free: offer.free,
+      })),
   }));
 
   // Prefer the requested day, then the first day that still has a free slot, so
   // the picker never opens on an empty "no slots left" state.
   const initialDate =
     bookingDays.find((day) => day.date === dateParam)?.date ??
-    bookingDays.find((day) => day.slots.length > 0)?.date ??
+    bookingDays.find((day) => day.freeSeats > 0)?.date ??
     bookingDays[0]?.date ??
     "";
 
+  const weeklyBlocks = blocks.filter(
+    (block): block is WeeklyBlock => block.dayOfWeek !== null,
+  );
+  const datedBlocks = blocks.filter(
+    (block): block is DatedBlock => block.dayOfWeek === null,
+  );
+
   // The weekly schedule as a patient reads it: one tile per consulting day,
   // Monday first.
-  const weeklySchedule = [...new Set(windows.map((w) => w.dayOfWeek))]
+  const weeklySchedule = [...new Set(weeklyBlocks.map((block) => block.dayOfWeek))]
     .sort((a, b) => ((a + 6) % 7) - ((b + 6) % 7))
     .map((day) => ({
       dayOfWeek: day,
       label: WEEKDAYS[day] ?? "",
       short: (WEEKDAYS[day] ?? "").slice(0, 3),
-      ranges: windows
-        .filter((w) => w.dayOfWeek === day)
-        .map((w) => ({ id: w.id, start: w.startTime, end: w.endTime })),
+      ranges: weeklyBlocks
+        .filter((block) => block.dayOfWeek === day)
+        .map((block) => ({
+          id: block.id,
+          start: block.startTime,
+          end: block.endTime,
+          style: describeStyle(block),
+        })),
     }));
 
-  const slotLengths = [...new Set(windows.map((w) => w.slotMinutes))];
+  const styles = [...new Set(blocks.map((block) => block.schedulingType))];
 
   const weeklyHours = Math.round(
-    windows.reduce((total, w) => total + minutesBetween(w.startTime, w.endTime), 0) / 60,
+    (weeklyBlocks.length ? weeklyBlocks : blocks).reduce(
+      (total, block) => total + minutesBetween(block.startTime, block.endTime),
+      0,
+    ) / 60,
   );
 
   const consultingDays =
-    windows.length > 0
-      ? [...new Set(windows.map((w) => w.dayOfWeek))]
+    weeklyBlocks.length > 0
+      ? [...new Set(weeklyBlocks.map((block) => block.dayOfWeek))]
           .sort((a, b) => ((a + 6) % 7) - ((b + 6) % 7))
           .map((day) => WEEKDAYS[day]?.slice(0, 3) ?? "")
           .join(", ")
-      : "Not set";
+      : datedBlocks.length > 0
+        ? "By date"
+        : "Not set";
+
+  const visitLengths = [...new Set(blocks.map((block) => block.slotMinutes))];
 
   return (
     <div className="space-y-6">
@@ -189,12 +217,12 @@ export default async function DoctorProfilePage({
               ))}
             </dl>
 
-            {windows.length > 0 && (
+            {blocks.length > 0 && (
               <div className="overflow-hidden rounded-2xl border border-cream-200 shadow-sm">
                 <div className="bg-gradient-to-br from-teal-800 to-teal-950 px-4 py-4 text-white">
                   <p className="flex items-center gap-1.5 text-[11px] font-semibold uppercase tracking-wide text-teal-100">
                     <CalendarClock className="h-3.5 w-3.5" aria-hidden="true" />
-                    Weekly availability
+                    Availability
                   </p>
                   <dl className="mt-3.5 grid grid-cols-3 divide-x divide-white/10 text-center">
                     <div>
@@ -213,44 +241,74 @@ export default async function DoctorProfilePage({
                     </div>
                     <div>
                       <dt className="text-[10px] uppercase tracking-wide text-teal-200/80">
-                        Slot length
+                        Scheduling
                       </dt>
-                      <dd className="mt-0.5 text-lg font-semibold tabular-nums">
-                        {slotLengths.length === 1 ? `${slotLengths[0]}m` : "Mixed"}
+                      <dd className="mt-0.5 text-sm font-semibold">
+                        {styles.map((style) => (style === "wave" ? "Wave" : "Stream")).join(" · ")}
                       </dd>
                     </div>
                   </dl>
                 </div>
-                <ul className="divide-y divide-cream-200 bg-white">
-                  {weeklySchedule.map((day) => (
-                    <li
-                      key={day.dayOfWeek}
-                      className="flex items-center justify-between gap-3 px-4 py-2.5"
-                    >
-                      <span className="flex min-w-0 items-center gap-2.5">
-                        <span
-                          aria-hidden="true"
-                          className="grid h-8 w-8 shrink-0 place-items-center rounded-lg bg-teal-50 text-[10px] font-bold uppercase tracking-wide text-teal-800 ring-1 ring-inset ring-teal-100"
-                        >
-                          {day.short}
-                        </span>
-                        <span className="truncate text-sm font-medium text-ink-900">
-                          {day.label}
-                        </span>
-                      </span>
-                      <span className="flex flex-wrap justify-end gap-1.5">
-                        {day.ranges.map((range) => (
+
+                {weeklySchedule.length > 0 && (
+                  <ul className="divide-y divide-cream-200 bg-white">
+                    {weeklySchedule.map((day) => (
+                      <li
+                        key={day.dayOfWeek}
+                        className="flex items-center justify-between gap-3 px-4 py-2.5"
+                      >
+                        <span className="flex min-w-0 items-center gap-2.5">
                           <span
-                            key={range.id}
-                            className="rounded-lg bg-cream-50 px-2 py-1 text-xs font-medium tabular-nums text-ink-700 ring-1 ring-inset ring-cream-200"
+                            aria-hidden="true"
+                            className="grid h-8 w-8 shrink-0 place-items-center rounded-lg bg-teal-50 text-[10px] font-bold uppercase tracking-wide text-teal-800 ring-1 ring-inset ring-teal-100"
                           >
-                            {formatTime(range.start)} – {formatTime(range.end)}
+                            {day.short}
                           </span>
-                        ))}
-                      </span>
-                    </li>
-                  ))}
-                </ul>
+                          <span className="truncate text-sm font-medium text-ink-900">
+                            {day.label}
+                          </span>
+                        </span>
+                        <span className="flex flex-wrap justify-end gap-1.5">
+                          {day.ranges.map((range) => (
+                            <span
+                              key={range.id}
+                              className="rounded-lg bg-cream-50 px-2 py-1 text-xs font-medium tabular-nums text-ink-700 ring-1 ring-inset ring-cream-200"
+                            >
+                              {formatTime(range.start)} – {formatTime(range.end)}
+                              <span className="ml-1.5 font-normal text-ink-500">
+                                {range.style}
+                              </span>
+                            </span>
+                          ))}
+                        </span>
+                      </li>
+                    ))}
+                  </ul>
+                )}
+
+                {datedBlocks.length > 0 && (
+                  <div className="border-t border-cream-200 bg-white px-4 py-3">
+                    <p className="text-[11px] font-semibold uppercase tracking-wide text-ink-500">
+                      Specific dates
+                    </p>
+                    <ul className="mt-2 space-y-1.5">
+                      {datedBlocks.map((block) => (
+                        <li
+                          key={block.id}
+                          className="flex flex-wrap items-baseline justify-between gap-2 text-sm"
+                        >
+                          <span className="text-ink-800">
+                            {block.dates.map((date) => formatDate(date)).join(", ")}
+                          </span>
+                          <span className="text-xs tabular-nums text-ink-500">
+                            {formatTime(block.startTime)} – {formatTime(block.endTime)} ·{" "}
+                            {describeStyle(block)}
+                          </span>
+                        </li>
+                      ))}
+                    </ul>
+                  </div>
+                )}
               </div>
             )}
           </CardContent>
@@ -262,10 +320,12 @@ export default async function DoctorProfilePage({
               <CardTitle>Book an appointment</CardTitle>
               <span className="shrink-0 rounded-full bg-cream-100 px-2.5 py-1 text-xs font-medium tabular-nums text-ink-700 ring-1 ring-inset ring-cream-200">
                 {formatCurrency(doctor.consultationFee)}
-                {slotLengths.length === 1 ? ` · ${slotLengths[0]} min` : ""}
+                {visitLengths.length === 1 ? ` · ${visitLengths[0]} min` : ""}
               </span>
             </div>
-            <p className="text-sm text-ink-500">Pick a day, then choose a free slot.</p>
+            <p className="text-sm text-ink-500">
+              Pick a day, then choose a free slot. A wave slot holds several patients.
+            </p>
           </CardHeader>
           <CardContent className="space-y-5">
             {dayOptions.length === 0 ? (
@@ -320,6 +380,17 @@ function initials(fullName: string) {
     .slice(0, 2)
     .map((part) => part[0]?.toUpperCase() ?? "")
     .join("");
+}
+
+/** How a block is styled and how many patients it holds. */
+function describeStyle(block: {
+  readonly schedulingType: string;
+  readonly capacity: number;
+  readonly slotMinutes: number;
+}) {
+  return block.schedulingType === "wave"
+    ? `Wave · ${block.capacity} per slot · ${block.slotMinutes} min`
+    : `Stream · ${block.capacity} in window`;
 }
 
 /** "10:00", "14:30" -> minutes, used for the weekly-hours summary. */
