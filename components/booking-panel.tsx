@@ -37,7 +37,7 @@ export type BookingDay = {
  * Every day and its free slots arrive from the server in one pass, so switching
  * days is instant client state — no navigation, no round trip, no flash. The
  * only thing that reaches the server is the booking itself. The selected day is
- * mirrored into the URL with `replaceState` so the link stays shareable.
+ * mirrored into the URL so the link stays shareable.
  *
  * This replaces the old server-driven list, where every day switch was a full
  * navigation. The server action still re-validates the slot, so a race between
@@ -64,13 +64,23 @@ export function BookingPanel({
   const activeDay = days.find((day) => day.date === activeDate) ?? days[0];
   const selectedSlot = activeDay?.slots.find((slot) => slot.time === selected);
 
-  // Keep the URL shareable without asking the server to re-render.
+  // Keep the URL shareable without involving the Next router.
+  //
+  // Next.js patches `history.replaceState` so a URL change re-renders the
+  // server tree. For a client-side day picker that is the wrong trade: the
+  // round trip can land after the patient has already moved on, and the
+  // re-render resets the day that was just chosen. The native History API
+  // updates the address bar and nothing else — and because the URL then
+  // carries the chosen day, even a remount lands on the right day.
   useEffect(() => {
     const url = new URL(window.location.href);
-    if (url.searchParams.get("date") !== activeDate) {
-      url.searchParams.set("date", activeDate);
-      window.history.replaceState(null, "", url.toString());
-    }
+    if (url.searchParams.get("date") === activeDate) return;
+
+    url.searchParams.set("date", activeDate);
+    const nativeHistory = Object.getPrototypeOf(window.history) as {
+      replaceState: (data: unknown, title: string, url?: string | null) => void;
+    };
+    nativeHistory.replaceState.call(window.history, null, "", url.toString());
   }, [activeDate]);
 
   const chooseDay = (date: string) => {
