@@ -1,6 +1,6 @@
 import { nextAttemptAt } from "./retry-policy";
 import type { NotificationChannel, NotificationChannelName, NotificationMessage } from "./types";
-import type { NotificationRecord, NotificationStore } from "./store";
+import type { LedgerChannel, NotificationRecord, NotificationStore } from "./store";
 
 /**
  * The send-once-then-record half of the pipeline, with its store and transport
@@ -45,7 +45,6 @@ async function sendRecord(
       subject: record.subject ?? "",
       text: record.body,
       html: record.htmlBody,
-      contentVariables: record.contentVariables,
       meta: { kind: record.kind },
     });
 
@@ -88,9 +87,6 @@ export async function dispatchNotification(
       subject: meta.channel === "email" ? message.subject : null,
       body: message.text,
       htmlBody: meta.channel === "email" ? (message.html ?? null) : null,
-      // Only the templated transport re-uses its variables on a retry; SMS
-      // carries free-form text from this same body field.
-      contentVariables: meta.channel === "whatsapp" ? (message.contentVariables ?? null) : null,
       idempotencyKey: meta.idempotencyKey ?? null,
     },
     now,
@@ -105,8 +101,13 @@ export async function dispatchNotification(
 
 export type RetryDependencies = {
   store: NotificationStore;
-  /** Resolve a transport per channel; null means "no transport configured yet". */
-  resolveChannel: (channel: NotificationChannelName) => NotificationChannel | null;
+  /**
+   * Resolve a transport per channel; null means "no transport configured yet".
+   *
+   * A legacy `whatsapp` row resolves to null: the channel was removed, so
+   * there is nothing left to retry it on.
+   */
+  resolveChannel: (channel: LedgerChannel) => NotificationChannel | null;
   now?: Date;
 };
 
