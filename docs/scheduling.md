@@ -10,10 +10,10 @@ Two styles, two ways to repeat, one capacity rule.
 
 | | **Wave** | **Stream** |
 |---|---|---|
-| Shape | A repeated visit slot | A continuous run of appointments |
+| Shape | A repeated visit slot | One continuous window, booked as a single item |
 | Capacity means | Patients **per slot** | Patients **in the whole window** |
-| Visit length | Set by the doctor (15/30/45/60 min) | Derived from the capacity |
-| Patient sees | `10:00 · 2 left` | `10:00` with a `Stream` badge |
+| Visit length | Set by the doctor (15/30/45/60 min) | Not set by the doctor |
+| Patient sees | `10:00 · 2 left` | `10:00 AM – 12:00 PM` on its own row |
 
 ### Wave
 
@@ -29,17 +29,29 @@ window with 30-minute visits offers `10:00` and `10:30`, not `11:00`.
 
 ### Stream
 
-The window is divided into as many evenly spaced positions as the capacity
-allows, and each position holds exactly one patient. The doctor never sets a
-visit length; the capacity alone decides how many appointments fit and how far
-apart they sit.
+The window is one bookable item: the patient books the whole run as a single
+**start – end** range, and the capacity says how many patients may sit in it.
+The doctor never sets a visit length.
 
 > 10:00 – 12:00, capacity 5
 >
-> `10:00` · `10:24` · `10:48` · `11:12` · `11:36`
+> `10:00 AM – 12:00 PM` — one row, `5 of 5 places left`
 
-The spacing is `round(window minutes ÷ capacity)`, never less than a minute, and
-it is stored on the block at insert time — the client never computes it.
+There are no per-position times to choose from. A derived start time inside the
+window (say 10:24) would be fiction: the clinic does not promise a patient a
+particular moment inside the run, so no surface — the booking page, the
+dashboard, a receipt, an email or an SMS — ever shows one.
+
+Inside the window, patients are seated in **queue order**: the first booking
+takes seat 1, the next seat 2, and so on. The appointment stores the window's
+start, and the seat number orders the clinic's queue through the window. The
+doctor's dashboard shows the same range plus the patient's place in it
+(`10:00 AM – 12:00 PM · #2 of 5`).
+
+The window's spacing is still derived — `round(window minutes ÷ capacity)`,
+never less than a minute — and stored on the block at publish time, so the
+stored rules round-trip and a window can never promise more patients than it
+has minutes. It is a publish-time fact, not something the patient ever sees.
 
 ## The two ways to repeat
 
@@ -57,8 +69,8 @@ A block may list at most 30 dates (`MAX_BLOCK_DATES`).
 
 ## Capacity is enforced by the database
 
-Every appointment carries a `seat_number` — which seat in the slot it holds,
-numbered from one. The seats live in a partial unique index:
+Every appointment carries a `seat_number` — which seat it holds, numbered from
+one. The seats live in a partial unique index:
 
 ```sql
 CREATE UNIQUE INDEX appointments_booked_seat_unique
@@ -69,6 +81,10 @@ CREATE UNIQUE INDEX appointments_booked_seat_unique
 That index is the authority. Two patients racing for seat one of a three-patient
 wave cannot both win: one insert is refused by Postgres, and the loser re-reads
 the taken seats and takes the next free one.
+
+A stream's appointments all carry the **window's start** as their time, so the
+same index and the same tally do the work: seat 1 is the first patient in the
+run, seat 2 the second, and the window is full when its capacity is booked.
 
 - **No free seat** → the booking is refused with *"That slot is full."*
 - **Lost the race** → the booking retries up to three times, then says *"That slot was just taken."*
@@ -92,7 +108,7 @@ half-open.
 
 | File | What it holds |
 |---|---|
-| `lib/schedule.ts` | The pure domain: positions, seats, conflicts, offers, stream spacing |
+| `lib/schedule.ts` | The pure domain: positions, seats, conflicts, offers, window labels |
 | `lib/availability.ts` | Loads blocks (and their dates) from the database as domain blocks |
 | `lib/seats.ts` | Seat tallies per slot and per date range |
 | `lib/slots.ts` | The clinic clock (IST), so "today" is right on a UTC server |
@@ -126,7 +142,8 @@ The block then appears in the list, under *Specific dates* if it is date-based.
 3. Pick a day tab. The tab shows how many seats are free across the whole day.
 4. Pick a slot.
    - A wave slot reads `10:00 · 2 left`.
-   - A stream slot reads `10:00` with a `Stream` badge.
+   - A stream window reads `10:00 AM – 12:00 PM` on its own row, with the free
+     places written under it.
 5. **Confirm** the slot.
 
 ### Proving the capacity limit
@@ -144,8 +161,10 @@ That absence is the database index doing its job.
 ### Proving a stream
 
 The demo doctor has a Friday stream, 16:00–19:00, capacity 5. The profile page
-shows `16:00`, `16:36`, `17:12`, `17:48` and `18:24` — five evenly spaced
-positions, each with one seat, and each badged `Stream`.
+shows **one** item for it — `4:00 PM – 7:00 PM`, spanning the whole window,
+with `Stream window · 5 of 5 places left` written beside it. There is no list
+of times inside the window to choose from, because there is no promised moment
+inside the window to choose.
 
 ### Proving the dated blocks
 
