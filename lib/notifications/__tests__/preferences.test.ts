@@ -63,6 +63,8 @@ const ctx: AppointmentMailContext = {
   time: "10:30",
   // The settled payment behind this visit; the receipt link needs it.
   paymentId: 38,
+  schedulingType: "wave",
+  visitEndTime: null,
   // Deliberately sensitive: if any template quotes this, the PHI rule is broken.
   reason: "diabetes follow-up, blood sugar high",
   fee: "600.00",

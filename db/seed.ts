@@ -75,8 +75,8 @@ function wave(
 }
 
 /**
- * A stream: patients are spread through the window, so the capacity counts
- * patients in the window and the spacing between them is derived.
+ * A stream: the window books as one start–end item, so the capacity counts
+ * patients in the window and the spacing is derived at publish time.
  */
 function stream(
   dayOfWeek: number,

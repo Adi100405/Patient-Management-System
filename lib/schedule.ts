@@ -1,4 +1,5 @@
 import { dayOfWeekFor, toMinutes, toTime } from "./slots";
+import { formatTime } from "./utils";
 
 /**
  * The two scheduling styles a doctor can publish.
@@ -7,9 +8,10 @@ import { dayOfWeekFor, toMinutes, toTime } from "./slots";
  * time and the doctor sees them together, so the capacity counts patients per
  * slot.
  *
- * Stream: a continuous run of appointments. The window is divided into as many
- * evenly spaced positions as the capacity allows and each position holds one
- * patient, so the capacity counts patients in the window.
+ * Stream: a continuous run of appointments. The window is offered as one
+ * bookable item — the patient books "start – end" — and the capacity counts
+ * how many patients the window may hold. Seat numbers order the clinic queue
+ * through the window.
  */
 export const SCHEDULING_TYPES = ["wave", "stream"] as const;
 
@@ -30,8 +32,9 @@ export type ScheduleRules = {
   readonly endTime: string;
   /**
    * Wave: the length of one visit, so the next patient starts when it ends.
-   * Stream: the derived distance between two positions, which is the window
-   * divided by the capacity.
+   * Stream: the publish-time spacing the window was derived from — the window
+   * divided by the capacity. It is kept so stored rules round-trip, but stream
+   * bookings no longer fan out by it: the window books as one item.
    */
   readonly slotMinutes: number;
   readonly capacity: number;
@@ -46,7 +49,7 @@ export type ScheduleBlock = ScheduleRules & {
   readonly dates: readonly string[];
 };
 
-/** One bookable start time inside a block, and how many patients it may hold. */
+/** One bookable start time inside a wave block, and how many patients it may hold. */
 export type Position = {
   readonly time: string;
   readonly seats: number;
@@ -58,9 +61,14 @@ export type WeeklyBlock = ScheduleBlock & { readonly dayOfWeek: number };
 /** A block that opens on an explicit list of dates. */
 export type DatedBlock = ScheduleBlock & { readonly dayOfWeek: null };
 
-/** A position as the patient sees it: what is left of it. */
+/** A bookable window as the patient sees it: what it covers and what is left in it. */
 export type SlotOffer = {
   readonly time: string;
+  /**
+   * Where the bookable item ends: null for a wave slot (next slot starts the
+   * next visit), the window's end for a stream.
+   */
+  readonly endTime: string | null;
   readonly availabilityId: number;
   readonly schedulingType: SchedulingType;
   readonly seats: number;
@@ -69,9 +77,10 @@ export type SlotOffer = {
 };
 
 /**
- * The distance between two stream positions: the window divided by the
- * capacity. Stream needs no visit length from the doctor — the capacity alone
- * decides how many appointments the window holds and how far apart they sit.
+ * The spacing a stream window was published with: the window divided by the
+ * capacity. Bookings no longer fan a stream out by it — the window books as
+ * one start–end item — but publish-time rules still fill the slot-length field
+ * with it so stored blocks round-trip and capacity-vs-window is validated.
  */
 export function streamSpacing(startTime: string, endTime: string, capacity: number) {
   const span = toMinutes(endTime) - toMinutes(startTime);
@@ -84,7 +93,10 @@ export function positionsFor(rules: ScheduleRules): readonly Position[] {
     case "wave":
       return wavePositions(rules);
     case "stream":
-      return streamPositions(rules);
+      // A stream has no positions to fan out: the patient books the window as
+      // one start–end item, so the block itself (start, end, capacity) is the
+      // whole shape of it.
+      return [];
     default:
       return assertNever(rules.schedulingType);
   }
@@ -101,21 +113,6 @@ function wavePositions(rules: ScheduleRules): readonly Position[] {
 
   for (let t = start; t + rules.slotMinutes <= end; t += rules.slotMinutes) {
     positions.push({ time: toTime(t), seats: rules.capacity });
-  }
-
-  return positions;
-}
-
-/**
- * Stream positions are the capacity itself: one patient each, spaced evenly
- * across the window.
- */
-function streamPositions(rules: ScheduleRules): readonly Position[] {
-  const positions: Position[] = [];
-  const start = toMinutes(rules.startTime);
-
-  for (let index = 0; index < rules.capacity; index += 1) {
-    positions.push({ time: toTime(start + index * rules.slotMinutes), seats: 1 });
   }
 
   return positions;
@@ -200,9 +197,11 @@ export type OfferInput = {
 };
 
 /**
- * Every position a patient may still book on a date, with its seat counts.
- * A position whose seats are all taken is returned with no free seats; the
- * booking page drops those, and the doctor sees the whole picture.
+ * Every bookable item a patient may still choose on a date, with its seat
+ * counts. A wave books a slot; a stream books its window as one start–end
+ * item, all of whose seats are tallied at the window's start. An item whose
+ * seats are all taken is returned with no free seats; the booking page drops
+ * those, and the doctor sees the whole picture.
  */
 export function offersFor(input: OfferInput): readonly SlotOffer[] {
   const offers: SlotOffer[] = [];
@@ -210,12 +209,28 @@ export function offersFor(input: OfferInput): readonly SlotOffer[] {
   for (const block of input.blocks) {
     if (!blockAppliesOn(block, input.date)) continue;
 
+    if (block.schedulingType === "stream") {
+      if (slotHasStarted(input.date, block.startTime, input.now)) continue;
+      const taken = input.takenSeats.get(block.startTime) ?? 0;
+      offers.push({
+        time: block.startTime,
+        endTime: block.endTime,
+        availabilityId: block.id,
+        schedulingType: block.schedulingType,
+        seats: block.capacity,
+        taken,
+        free: Math.max(0, block.capacity - taken),
+      });
+      continue;
+    }
+
     for (const position of positionsFor(block)) {
       if (slotHasStarted(input.date, position.time, input.now)) continue;
 
       const taken = input.takenSeats.get(position.time) ?? 0;
       offers.push({
         time: position.time,
+        endTime: null,
         availabilityId: block.id,
         schedulingType: block.schedulingType,
         seats: position.seats,
@@ -236,6 +251,28 @@ export function slotHasStarted(
 ): boolean {
   if (date !== now.date) return false;
   return toMinutes(time) <= now.minutes;
+}
+
+/**
+ * How a visit reads in an appointment list.
+ *
+ * A stream visit books the window as one item, so it reads as one range —
+ * "10:00 AM – 12:00 PM" — rather than a start time that would imply a moment.
+ * A wave visit reads as its start time. When a stream's window end is missing
+ * (legacy rows), it degrades to the start time rather than showing a partial
+ * range.
+ */
+export function visitWhenLabel(input: {
+  readonly schedulingType: SchedulingType;
+  /** "10:00" — for a stream, the window's start. */
+  readonly time: string;
+  /** The stream window's end; null for a wave, or for a degraded stream row. */
+  readonly windowEnd?: string | null;
+}): string {
+  if (input.schedulingType === "stream" && input.windowEnd) {
+    return `${formatTime(input.time)} – ${formatTime(input.windowEnd)}`;
+  }
+  return formatTime(input.time);
 }
 
 function assertNever(value: never): never {

@@ -1,7 +1,7 @@
 import { and, asc, desc, eq, gte, lt, ne, or, sql } from "drizzle-orm";
 import { AlertTriangle, Calendar, Clock, Users } from "lucide-react";
 import { getDb } from "@/db";
-import { appointments, patients } from "@/db/schema";
+import { appointments, availability, patients } from "@/db/schema";
 import { AppointmentActions } from "@/components/appointment-actions";
 import { AvailabilityManager, type AvailabilityRow } from "@/components/availability-manager";
 import { CancelAppointment } from "@/components/cancel-appointment";
@@ -10,8 +10,9 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { blocksForDoctor } from "@/lib/availability";
 import type { CancelPreview } from "@/lib/cancel-preview";
 import { requireRole } from "@/lib/session";
+import { visitWhenLabel } from "@/lib/schedule";
 import { clinicClock, clinicNow, slotArrived } from "@/lib/slots";
-import { formatDate, formatTime } from "@/lib/utils";
+import { formatDate } from "@/lib/utils";
 import type { AppointmentStatus } from "@/db/schema";
 
 export const dynamic = "force-dynamic";
@@ -46,14 +47,40 @@ type ScheduleRow = {
   readonly reason: string | null;
   readonly patientName: string;
   readonly patientPhone: string | null;
+  /** The window block this visit was booked into. */
+  readonly availabilityId: number | null;
+  /** Where this patient sits in the window's queue. */
+  readonly seatNumber: number;
+  readonly schedulingType: "wave" | "stream" | null;
+  /** A stream window's end; null for a wave slot. */
+  readonly windowEnd: string | null;
 };
+
+/**
+ * How a visit reads for the doctor: a stream shows the window it belongs to
+ * plus the patient's place in the queue, because every patient in that window
+ * starts at the same moment. A wave shows its own start time.
+ */
+function doctorWhen(row: ScheduleRow, capacity: number | null) {
+  const when = visitWhenLabel({
+    schedulingType: row.schedulingType ?? "wave",
+    time: row.time,
+    windowEnd: row.windowEnd,
+  });
+  if (row.schedulingType === "stream" && capacity !== null) {
+    return `${when} · #${row.seatNumber} of ${capacity}`;
+  }
+  return when;
+}
 
 function ScheduleItem({
   row,
+  capacity,
   canResolve,
   canCancel,
 }: {
   row: ScheduleRow;
+  capacity: number | null;
   canResolve: boolean;
   canCancel: boolean;
 }) {
@@ -71,7 +98,7 @@ function ScheduleItem({
           <div className="flex flex-wrap items-center gap-2">
             <span className="inline-flex items-center gap-1.5 rounded-full bg-cream-100 px-2.5 py-1 text-xs font-medium text-ink-700">
               <Calendar className="h-3.5 w-3.5 text-ink-500" />
-              {formatDate(row.date)} · {formatTime(row.time)}
+              {formatDate(row.date)} · {doctorWhen(row, capacity)}
             </span>
             {row.patientPhone && (
               <span className="text-xs text-ink-500">{row.patientPhone}</span>
@@ -90,7 +117,7 @@ function ScheduleItem({
         {canCancel && (
           <CancelAppointment
             appointmentId={row.id}
-            subject={`${row.patientName} · ${formatDate(row.date)} at ${formatTime(row.time)}`}
+            subject={`${row.patientName} · ${formatDate(row.date)} · ${doctorWhen(row, capacity)}`}
             preview={CLINIC_CANCEL_PREVIEW}
             clinicCancellation
             variant="outline"
@@ -118,9 +145,14 @@ export default async function DoctorDashboard() {
       reason: appointments.reason,
       patientName: patients.fullName,
       patientPhone: patients.phone,
+      availabilityId: appointments.availabilityId,
+      seatNumber: appointments.seatNumber,
+      schedulingType: availability.schedulingType,
+      windowEnd: availability.endTime,
     })
     .from(appointments)
     .innerJoin(patients, eq(appointments.patientId, patients.id))
+    .leftJoin(availability, eq(appointments.availabilityId, availability.id))
     .where(
       and(
         eq(appointments.doctorId, session.profileId),
@@ -128,7 +160,11 @@ export default async function DoctorDashboard() {
         gte(appointments.appointmentDate, now.date),
       ),
     )
-    .orderBy(asc(appointments.appointmentDate), asc(appointments.appointmentTime))
+    .orderBy(
+      asc(appointments.appointmentDate),
+      asc(appointments.appointmentTime),
+      asc(appointments.seatNumber),
+    )
     .limit(50);
 
   const historyRows = await db
@@ -140,9 +176,14 @@ export default async function DoctorDashboard() {
       reason: appointments.reason,
       patientName: patients.fullName,
       patientPhone: patients.phone,
+      availabilityId: appointments.availabilityId,
+      seatNumber: appointments.seatNumber,
+      schedulingType: availability.schedulingType,
+      windowEnd: availability.endTime,
     })
     .from(appointments)
     .innerJoin(patients, eq(appointments.patientId, patients.id))
+    .leftJoin(availability, eq(appointments.availabilityId, availability.id))
     .where(
       and(
         eq(appointments.doctorId, session.profileId),
@@ -152,7 +193,11 @@ export default async function DoctorDashboard() {
         ),
       ),
     )
-    .orderBy(desc(appointments.appointmentDate), desc(appointments.appointmentTime))
+    .orderBy(
+      desc(appointments.appointmentDate),
+      desc(appointments.appointmentTime),
+      desc(appointments.seatNumber),
+    )
     .limit(50);
 
   const [stats] = await db
@@ -183,6 +228,8 @@ export default async function DoctorDashboard() {
     slotMinutes: block.slotMinutes,
     capacity: block.capacity,
   }));
+
+  const capacityByBlock = new Map(blocks.map((block) => [block.id, block.capacity]));
 
   const bookedPerWindow = await db
     .select({ availabilityId: appointments.availabilityId, total: sql<number>`count(*)::int` })
@@ -265,6 +312,7 @@ export default async function DoctorDashboard() {
               <ScheduleItem
                 key={row.id}
                 row={row}
+                capacity={row.availabilityId === null ? null : (capacityByBlock.get(row.availabilityId) ?? null)}
                 canResolve={slotArrived(row.date, row.time)}
                 canCancel
               />
@@ -290,6 +338,7 @@ export default async function DoctorDashboard() {
               <ScheduleItem
                 key={row.id}
                 row={row}
+                capacity={row.availabilityId === null ? null : (capacityByBlock.get(row.availabilityId) ?? null)}
                 canResolve={row.status === "booked"}
                 canCancel={false}
               />

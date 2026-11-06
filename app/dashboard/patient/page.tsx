@@ -3,7 +3,7 @@ import { and, asc, eq, gte, inArray, lte } from "drizzle-orm";
 import { after } from "next/server";
 import { Bookmark, Calendar, Check, Clock, Receipt, RefreshCw } from "lucide-react";
 import { getDb } from "@/db";
-import { appointments, doctors, patients, payments, users, visitNotes } from "@/db/schema";
+import { appointments, availability, doctors, patients, payments, users, visitNotes } from "@/db/schema";
 import type { AppointmentStatus } from "@/db/schema";
 import { CancelAppointment } from "@/components/cancel-appointment";
 import { Badge } from "@/components/ui/badge";
@@ -21,8 +21,8 @@ import { sweepReminders } from "@/lib/notifications/reminders";
 import { sweepCareFollowUps } from "@/lib/notifications/care";
 import { requireRole } from "@/lib/session";
 import { clinicNow, dayOption, upcomingDays, type DayOption } from "@/lib/slots";
-import { offersFor, openDates } from "@/lib/schedule";
-import { formatDate, formatTime } from "@/lib/utils";
+import { offersFor, openDates, visitWhenLabel } from "@/lib/schedule";
+import { formatDate } from "@/lib/utils";
 
 export const dynamic = "force-dynamic";
 export const metadata = { title: "Patient dashboard — Medrella" };
@@ -40,6 +40,23 @@ const statusLabel: Record<AppointmentStatus, string> = {
   completed: "Completed",
   no_show: "No-show",
 };
+
+/**
+ * How an appointment reads as its time: a stream books the window as one item,
+ * so it reads as a start–end range; a wave — or a row whose window block has
+ * since been deleted — reads as its start time.
+ */
+function visitWhen(row: {
+  readonly time: string;
+  readonly schedulingType: "wave" | "stream" | null;
+  readonly windowEnd: string | null;
+}) {
+  return visitWhenLabel({
+    schedulingType: row.schedulingType ?? "wave",
+    time: row.time,
+    windowEnd: row.windowEnd,
+  });
+}
 
 export default async function PatientDashboard() {
   const session = await requireRole("patient");
@@ -61,6 +78,8 @@ export default async function PatientDashboard() {
       time: appointments.appointmentTime,
       status: appointments.status,
       reason: appointments.reason,
+      schedulingType: availability.schedulingType,
+      windowEnd: availability.endTime,
       doctorName: doctors.fullName,
       specialization: doctors.specialization,
       fee: doctors.consultationFee,
@@ -74,10 +93,15 @@ export default async function PatientDashboard() {
     })
     .from(appointments)
     .innerJoin(doctors, eq(appointments.doctorId, doctors.id))
+    .leftJoin(availability, eq(appointments.availabilityId, availability.id))
     .leftJoin(payments, eq(payments.appointmentId, appointments.id))
     .leftJoin(visitNotes, eq(visitNotes.appointmentId, appointments.id))
     .where(eq(appointments.patientId, session.profileId))
-    .orderBy(asc(appointments.appointmentDate), asc(appointments.appointmentTime));
+    .orderBy(
+      asc(appointments.appointmentDate),
+      asc(appointments.appointmentTime),
+      asc(appointments.seatNumber),
+    );
 
   const refundsByPayment = await refundsForPatient(session.profileId);
 
@@ -198,6 +222,7 @@ export default async function PatientDashboard() {
               .filter((offer) => offer.free > 0)
               .map((offer) => ({
                 time: offer.time,
+                endTime: offer.endTime,
                 free: offer.free,
                 seats: offer.seats,
                 schedulingType: offer.schedulingType,
@@ -287,7 +312,7 @@ export default async function PatientDashboard() {
                       <div className="flex flex-wrap items-center gap-2">
                         <span className="inline-flex items-center gap-1.5 rounded-full bg-cream-100 px-2.5 py-1 text-xs font-medium text-ink-700">
                           <Calendar className="h-3.5 w-3.5 text-ink-500" />
-                          {formatDate(row.date)} · {formatTime(row.time)}
+                          {formatDate(row.date)} · {visitWhen(row)}
                         </span>
                         <PaymentChip row={row} />
                       </div>
@@ -321,7 +346,7 @@ export default async function PatientDashboard() {
                   )}
                   <CancelAppointment
                     appointmentId={row.id}
-                    subject={`Dr. ${row.doctorName} · ${formatDate(row.date)} at ${formatTime(row.time)}`}
+                    subject={`Dr. ${row.doctorName} · ${formatDate(row.date)} · ${visitWhen(row)}`}
                     preview={describeCancellation({
                       paymentStatus: row.paymentStatus,
                       paymentProvider: row.paymentProvider,
@@ -335,7 +360,7 @@ export default async function PatientDashboard() {
                   ) && (
                     <RescheduleAppointment
                       appointmentId={row.id}
-                      currentLabel={`${formatDate(row.date)} at ${formatTime(row.time)}`}
+                      currentLabel={`${formatDate(row.date)} · ${visitWhen(row)}`}
                       currentDate={row.date}
                       currentTime={row.time}
                       days={rescheduleDays.get(row.id)!}
@@ -405,7 +430,7 @@ export default async function PatientDashboard() {
                             </div>
                             <p className="text-xs text-ink-500">{row.specialization}</p>
                             <p className="mt-1 text-xs tabular-nums text-ink-600">
-                              {formatDate(row.date)} · {formatTime(row.time)}
+                              {formatDate(row.date)} · {visitWhen(row)}
                             </p>
                           </div>
                         </div>

@@ -107,8 +107,9 @@ export const availability = pgTable(
     endTime: text("end_time").notNull(),
     /**
      * Wave: the length of one visit, so the next patient starts when it ends.
-     * Stream: the derived distance between two positions, which is the window
-     * divided by the capacity — a stream never asks the doctor for a length.
+     * Stream: the publish-time spacing the window was derived from — the window
+     * divided by the capacity. The window books as one item, so this is a
+     * stored rule, not a time the patient is offered.
      */
     slotMinutes: integer("slot_minutes").notNull().default(30),
     /** Wave: patients per slot. Stream: patients in the window. */
@@ -170,9 +171,9 @@ export const appointments = pgTable(
     /** "10:30" */
     appointmentTime: text("appointment_time").notNull(),
     /**
-     * Which seat in the slot this patient holds, numbered from one. A wave
-     * slot has as many seats as its capacity; a stream position has exactly
-     * one.
+     * Which seat this patient holds, numbered from one. A wave slot has as
+     * many seats as its capacity; a stream window has as many, and the seat
+     * orders the queue through the window.
      */
     seatNumber: integer("seat_number").notNull().default(1),
     status: appointmentStatusEnum("status").notNull().default("booked"),

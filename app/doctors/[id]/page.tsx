@@ -106,6 +106,7 @@ export default async function DoctorProfilePage({
       .filter((offer) => offer.free > 0)
       .map((offer) => ({
         time: offer.time,
+        endTime: offer.endTime,
         availabilityId: offer.availabilityId,
         schedulingType: offer.schedulingType,
         seats: offer.seats,

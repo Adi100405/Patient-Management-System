@@ -34,10 +34,10 @@ const selectClass =
 /**
  * The doctor's schedule editor.
  *
- * A block is either a wave (patients share a slot) or a stream (patients are
- * spread through the window), and it either repeats every week or opens on a
- * list of dates. One date is a single visit day; several are a recurring
- * series.
+ * A block is either a wave (patients share a slot) or a stream (the whole
+ * window books as one start–end item), and it either repeats every week or
+ * opens on a list of dates. One date is a single visit day; several are a
+ * recurring series.
  */
 export function AvailabilityManager({
   windows,
@@ -152,7 +152,7 @@ export function AvailabilityManager({
           <p className="text-xs text-ink-500">
             {type === "wave"
               ? "Patients share a slot. The capacity is per slot."
-              : "Patients are spread through the window. The capacity is per window."}
+              : "Patients book the whole window as one start–end slot. The capacity is per window."}
           </p>
         </div>
 

@@ -40,9 +40,8 @@ const isoDate = z.string().regex(/^\d{4}-\d{2}-\d{2}$/, "Pick a valid date");
  * weekday, a date-based block lists the dates it opens on. One listed date
  * makes the block non-recurring; several make it a recurring series.
  *
- * The visit length belongs to a wave only — a stream derives the distance
- * between its positions from the capacity, so the field is not part of its
- * contract.
+ * The visit length belongs to a wave only — a stream books its window as one
+ * start–end item, so the field is not part of its contract.
  */
 export const availabilitySchema = z
   .object({
@@ -84,14 +83,14 @@ export const availabilitySchema = z
       ctx.addIssue({ code: "custom", path: ["slotMinutes"], message: "Pick a visit length" });
     }
     if (value.schedulingType === "stream") {
-      // A stream positions its patients one minute apart at the tightest, so a
-      // window that is shorter than the capacity could never fit them all.
+      // A stream takes one patient per minute of window at the tightest, so a
+      // window shorter than its capacity could never hold them all.
       const windowMinutes = toMinutes(value.endTime) - toMinutes(value.startTime);
       if (value.capacity > windowMinutes) {
         ctx.addIssue({
           code: "custom",
           path: ["capacity"],
-          message: "A stream cannot hold more than one patient per minute",
+          message: "A stream cannot hold more patients than the window has minutes",
         });
       }
     }

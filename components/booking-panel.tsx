@@ -7,11 +7,13 @@ import { bookAppointment, type BookingState } from "@/actions/booking";
 import { Button } from "@/components/ui/button";
 import { PaymentCheckout } from "@/components/payment-checkout";
 import { Textarea } from "@/components/ui/textarea";
-import type { SchedulingType } from "@/lib/schedule";
-import { cn, formatDate, formatTime } from "@/lib/utils";
+import { visitWhenLabel, type SchedulingType } from "@/lib/schedule";
+import { cn, formatDate } from "@/lib/utils";
 
 export type BookingSlot = {
   time: string;
+  /** Where the bookable item ends — a stream window's end; null for a wave slot. */
+  endTime: string | null;
   availabilityId: number;
   schedulingType: SchedulingType;
   /** How many patients the slot holds in total. */
@@ -59,10 +61,12 @@ export function BookingPanel({
     null,
   );
   const [activeDate, setActiveDate] = useState(initialDate);
-  const [selected, setSelected] = useState<string | null>(null);
+  // The chosen slot, held as a snapshot. After the last seat of a window is
+  // booked, the refreshed server data no longer lists it — the success screen
+  // must still speak the range the patient actually chose.
+  const [selected, setSelected] = useState<BookingSlot | null>(null);
 
   const activeDay = days.find((day) => day.date === activeDate) ?? days[0];
-  const selectedSlot = activeDay?.slots.find((slot) => slot.time === selected);
 
   // Keep the URL shareable without involving the Next router.
   //
@@ -89,7 +93,7 @@ export function BookingPanel({
   };
 
   if (state?.message) {
-    const time = selected ? formatTime(selected) : "";
+    const when = selected ? whenLabel(selected) : "";
     const awaitingPayment = state.payment?.online === true && state.appointmentId !== undefined;
 
     return (
@@ -98,7 +102,9 @@ export function BookingPanel({
           {awaitingPayment ? "Slot held — complete payment to confirm" : "Appointment booked"}
         </p>
         <p className="text-sm text-teal-800">
-          {formatDate(activeDate)} at {time}
+          {selected?.schedulingType === "stream"
+            ? `${formatDate(activeDate)} · ${when}`
+            : `${formatDate(activeDate)} at ${when}`}
         </p>
         {awaitingPayment && state.appointmentId !== undefined && state.payment ? (
           <>
@@ -185,31 +191,66 @@ export function BookingPanel({
             </p>
           ) : (
             <div className="grid grid-cols-3 gap-2">
-              {activeDay.slots.map((slot) => (
-                <button
-                  key={slot.time}
-                  type="button"
-                  onClick={() => setSelected(slot.time)}
-                  aria-pressed={selected === slot.time}
-                  aria-label={slotLabel(slot)}
-                  className={cn(
-                    "inline-flex h-12 flex-col items-center justify-center gap-0.5 rounded-xl border px-1 text-xs font-medium tabular-nums transition duration-150 ease-out active:scale-[0.98]",
-                    selected === slot.time
-                      ? "border-teal-700 bg-teal-700 text-white shadow-sm"
-                      : "border-cream-300 bg-white text-ink-800 hover:border-teal-400 hover:bg-teal-50/60",
-                  )}
-                >
-                  <span className="inline-flex items-center gap-1">
-                    {selected === slot.time && <Check className="h-3 w-3" aria-hidden="true" />}
-                    {formatTime(slot.time)}
-                  </span>
-                  {slotNote(slot) && (
-                    <span className="text-[9px] font-semibold uppercase tracking-wide opacity-75">
-                      {slotNote(slot)}
+              {activeDay.slots.map((slot) => {
+                const isSelected = selected?.time === slot.time;
+                const isStream = slot.schedulingType === "stream";
+
+                if (isStream) {
+                  // A stream window books as one item: it owns the whole row and
+                  // reads as a start–end range, not a list of per-position times.
+                  return (
+                    <button
+                      key={slot.time}
+                      type="button"
+                      onClick={() => setSelected(slot)}
+                      aria-pressed={isSelected}
+                      aria-label={slotLabel(slot)}
+                      className={cn(
+                        "col-span-3 flex min-h-12 flex-col items-center justify-center gap-0.5 rounded-xl border px-3 py-2 text-xs font-medium transition duration-150 ease-out active:scale-[0.98] sm:flex-row sm:items-center sm:justify-between sm:gap-4 sm:px-4",
+                        isSelected
+                          ? "border-teal-700 bg-teal-700 text-white shadow-sm"
+                          : "border-cream-300 bg-white text-ink-800 hover:border-teal-400 hover:bg-teal-50/60",
+                      )}
+                    >
+                      <span className="inline-flex items-center gap-1.5 tabular-nums">
+                        {isSelected && <Check className="h-3 w-3" aria-hidden="true" />}
+                        <span className="text-sm font-semibold">{whenLabel(slot)}</span>
+                      </span>
+                      {slotNote(slot) && (
+                        <span className="text-[9px] font-semibold uppercase tracking-wide opacity-75 sm:text-[10px]">
+                          {slotNote(slot)}
+                        </span>
+                      )}
+                    </button>
+                  );
+                }
+
+                return (
+                  <button
+                    key={slot.time}
+                    type="button"
+                    onClick={() => setSelected(slot)}
+                    aria-pressed={isSelected}
+                    aria-label={slotLabel(slot)}
+                    className={cn(
+                      "inline-flex h-12 flex-col items-center justify-center gap-0.5 rounded-xl border px-1 text-xs font-medium tabular-nums transition duration-150 ease-out active:scale-[0.98]",
+                      isSelected
+                        ? "border-teal-700 bg-teal-700 text-white shadow-sm"
+                        : "border-cream-300 bg-white text-ink-800 hover:border-teal-400 hover:bg-teal-50/60",
+                    )}
+                  >
+                    <span className="inline-flex items-center gap-1">
+                      {isSelected && <Check className="h-3 w-3" aria-hidden="true" />}
+                      {whenLabel(slot)}
                     </span>
-                  )}
-                </button>
-              ))}
+                    {slotNote(slot) && (
+                      <span className="text-[9px] font-semibold uppercase tracking-wide opacity-75">
+                        {slotNote(slot)}
+                      </span>
+                    )}
+                  </button>
+                );
+              })}
             </div>
           )}
 
@@ -228,19 +269,21 @@ export function BookingPanel({
                 </Button>
               </Link>
             </div>
-          ) : selectedSlot ? (
+          ) : selected ? (
             <form action={formAction} className="animate-fade-up space-y-3">
               <input type="hidden" name="doctorId" value={doctorId} />
-              <input type="hidden" name="availabilityId" value={selectedSlot.availabilityId} />
+              <input type="hidden" name="availabilityId" value={selected.availabilityId} />
               <input type="hidden" name="date" value={activeDay.date} />
-              <input type="hidden" name="time" value={selectedSlot.time} />
+              <input type="hidden" name="time" value={selected.time} />
               <Textarea
                 name="reason"
                 placeholder="Reason for visit (optional) — e.g. recurring headaches"
                 maxLength={300}
               />
               <Button type="submit" className="w-full" loading={pending}>
-                {`Confirm ${formatTime(selectedSlot.time)} slot`}
+                {`Confirm ${whenLabel(selected)} ${
+                  selected.schedulingType === "stream" ? "window" : "slot"
+                }`}
               </Button>
             </form>
           ) : (
@@ -252,21 +295,34 @@ export function BookingPanel({
   );
 }
 
+/** What the tile's time reads as: a stream's full span, a wave's start time. */
+function whenLabel(slot: BookingSlot) {
+  return visitWhenLabel({
+    schedulingType: slot.schedulingType,
+    time: slot.time,
+    windowEnd: slot.endTime,
+  });
+}
+
 /**
- * The note under a slot: how many places are left in a wave, or the style of a
- * stream position. A wave with room for one patient needs no note — it reads
- * as a plain appointment.
+ * The note under a bookable item: what it is and how many places are left. A
+ * wave with room for one patient needs no note — it reads as a plain
+ * appointment.
  */
 function slotNote(slot: BookingSlot) {
-  if (slot.schedulingType === "stream") return "Stream";
+  if (slot.schedulingType === "stream") {
+    return `Stream window · ${slot.free} of ${slot.seats} places left`;
+  }
   if (slot.seats > 1) return `${slot.free} left`;
   return null;
 }
 
-/** What a screen reader hears for a slot, seats included. */
+/** What a screen reader hears for a bookable item, seats included. */
 function slotLabel(slot: BookingSlot) {
-  const time = formatTime(slot.time);
-  if (slot.schedulingType === "stream") return `${time} — stream appointment`;
-  if (slot.seats > 1) return `${time} — ${slot.free} of ${slot.seats} places left`;
-  return time;
+  const when = whenLabel(slot);
+  if (slot.schedulingType === "stream") {
+    return `${when} stream window, ${slot.free} of ${slot.seats} places left`;
+  }
+  if (slot.seats > 1) return `${when} — ${slot.free} of ${slot.seats} places left`;
+  return when;
 }

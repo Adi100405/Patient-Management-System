@@ -19,11 +19,11 @@ import {
   positionsFor,
   seatFor,
   slotHasStarted,
-  type Position,
+  visitWhenLabel,
   type ScheduleBlock,
 } from "@/lib/schedule";
 import { clinicClock, clinicNow, slotArrived } from "@/lib/slots";
-import { formatDate, formatTime } from "@/lib/utils";
+import { formatDate } from "@/lib/utils";
 
 export type BookingState = {
   error?: string;
@@ -80,7 +80,16 @@ export async function bookAppointment(
     return { error: "The doctor does not consult on that day." };
   }
 
-  const position = positionsFor(slotWindow).find((slot) => slot.time === data.time);
+  // What the patient is booking: a wave's slot at that time, or a stream
+  // window, which books as one item seated at its start — the per-position
+  // times of the old model no longer exist, so a stream only accepts its
+  // window's start.
+  const position =
+    slotWindow.schedulingType === "stream"
+      ? data.time === slotWindow.startTime
+        ? { seats: slotWindow.capacity }
+        : undefined
+      : positionsFor(slotWindow).find((slot) => slot.time === data.time);
   if (!position) {
     return { error: "That time is not one of this doctor's published slots." };
   }
@@ -194,7 +203,11 @@ export async function bookAppointment(
   await sendBookingConfirmation(appointmentId, { online });
 
   return {
-    message: `Booked for ${data.date} at ${data.time}`,
+    message: `Booked for ${data.date} at ${visitWhenLabel({
+      schedulingType: slotWindow.schedulingType,
+      time: data.time,
+      windowEnd: slotWindow.schedulingType === "stream" ? slotWindow.endTime : null,
+    })}`,
     appointmentId,
     payment: { amount: doctor.fee, currency: "INR", online },
   };
@@ -413,11 +426,17 @@ export async function rescheduleAppointment(
   // The new slot must come from the doctor's published availability, exactly
   // like a fresh booking — a reschedule cannot invent consulting hours.
   const blocks = await blocksForDoctor(appointment.doctorId);
-  const matches: { block: ScheduleBlock; position: Position }[] = [];
+  const matches: { block: ScheduleBlock; seats: number }[] = [];
   for (const block of blocks) {
     if (!blockAppliesOn(block, date)) continue;
+    if (block.schedulingType === "stream") {
+      // A stream window books as one item, seated at its start — the same
+      // rule a fresh booking follows.
+      if (time === block.startTime) matches.push({ block, seats: block.capacity });
+      continue;
+    }
     const position = positionsFor(block).find((slot) => slot.time === time);
-    if (position) matches.push({ block, position });
+    if (position) matches.push({ block, seats: position.seats });
   }
 
   const match = matches.at(0);
@@ -437,7 +456,7 @@ export async function rescheduleAppointment(
       time,
       exceptAppointmentId: appointment.id,
     });
-    const seat = seatFor(taken, match.position.seats);
+    const seat = seatFor(taken, match.seats);
 
     if (seat === null) {
       return { error: "That slot is full. Pick another time." };
@@ -481,6 +500,10 @@ export async function rescheduleAppointment(
   await sendRescheduleNotice(id, { previousDate, previousTime });
 
   return {
-    message: `Rescheduled to ${formatDate(date)} at ${formatTime(time)}`,
+    message: `Rescheduled to ${formatDate(date)} at ${visitWhenLabel({
+      schedulingType: match.block.schedulingType,
+      time,
+      windowEnd: match.block.schedulingType === "stream" ? match.block.endTime : null,
+    })}`,
   };
 }
