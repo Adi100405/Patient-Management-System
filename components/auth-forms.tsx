@@ -2,7 +2,13 @@
 
 import Link from "next/link";
 import { useActionState, useState } from "react";
-import { signInAction, signUpAction, type AuthState } from "@/actions/auth";
+import {
+  forgotPasswordAction,
+  resetPasswordAction,
+  signInAction,
+  signUpAction,
+  type AuthState,
+} from "@/actions/auth";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -42,6 +48,12 @@ export function SignInForm() {
       <Button type="submit" className="w-full" disabled={pending}>
         {pending ? "Signing in…" : "Sign in"}
       </Button>
+
+      <p className="text-center text-sm text-ink-600">
+        <Link href="/forgot-password" className="font-medium text-teal-700 hover:underline">
+          Forgot password?
+        </Link>
+      </p>
 
       <p className="text-center text-sm text-ink-600">
         New here?{" "}
@@ -150,6 +162,86 @@ export function SignUpForm() {
         Already registered?{" "}
         <Link href="/sign-in" className="font-medium text-teal-700 hover:underline">
           Sign in
+        </Link>
+      </p>
+    </form>
+  );
+}
+
+export function ForgotPasswordForm() {
+  const [state, formAction, pending] = useActionState<AuthState, FormData>(forgotPasswordAction, null);
+
+  return (
+    <form action={formAction} className="space-y-4">
+      {state?.message && (
+        <p className="rounded-xl border border-teal-200 bg-teal-50 p-3 text-sm text-teal-800">{state.message}</p>
+      )}
+
+      <div className="space-y-1.5">
+        <Label htmlFor="email">Email</Label>
+        <Input id="email" name="email" type="email" autoComplete="email" required />
+        <FieldError message={state?.errors?.email} />
+      </div>
+
+      <Button type="submit" className="w-full" disabled={pending}>
+        {pending ? "Sending link…" : "Send reset link"}
+      </Button>
+
+      <p className="text-center text-sm text-ink-600">
+        Remembered it?{" "}
+        <Link href="/sign-in" className="font-medium text-teal-700 hover:underline">
+          Sign in
+        </Link>
+      </p>
+    </form>
+  );
+}
+
+export function ResetPasswordForm({ token }: { token: string }) {
+  const [state, formAction, pending] = useActionState<AuthState, FormData>(resetPasswordAction, null);
+
+  return (
+    <form action={formAction} className="space-y-4">
+      {/* The link's credential rides along hidden; the user sets only a password. */}
+      <input type="hidden" name="token" value={token} />
+
+      {state?.error && (
+        <p className="rounded-xl border border-rose-200 bg-rose-50 p-3 text-sm text-rose-700">{state.error}</p>
+      )}
+
+      <div className="space-y-1.5">
+        <Label htmlFor="password">New password</Label>
+        <Input
+          id="password"
+          name="password"
+          type="password"
+          autoComplete="new-password"
+          minLength={6}
+          required
+        />
+        <FieldError message={state?.errors?.password} />
+      </div>
+
+      <div className="space-y-1.5">
+        <Label htmlFor="confirmPassword">Confirm new password</Label>
+        <Input
+          id="confirmPassword"
+          name="confirmPassword"
+          type="password"
+          autoComplete="new-password"
+          required
+        />
+        <FieldError message={state?.errors?.confirmPassword} />
+      </div>
+
+      <Button type="submit" className="w-full" disabled={pending}>
+        {pending ? "Saving password…" : "Set new password"}
+      </Button>
+
+      <p className="text-center text-sm text-ink-600">
+        Not working?{" "}
+        <Link href="/forgot-password" className="font-medium text-teal-700 hover:underline">
+          Request a fresh link
         </Link>
       </p>
     </form>

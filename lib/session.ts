@@ -2,7 +2,8 @@ import { eq } from "drizzle-orm";
 import { cookies } from "next/headers";
 import { redirect } from "next/navigation";
 import { getDb } from "@/db";
-import { doctors, patients } from "@/db/schema";
+import { doctors, patients, users } from "@/db/schema";
+import { isSessionStale } from "@/lib/password";
 import {
   SESSION_COOKIE,
   signSession,
@@ -12,7 +13,8 @@ import {
 
 export type { SessionPayload };
 
-export async function createSession(payload: SessionPayload) {
+export async function createSession(payload: Omit<SessionPayload, "issuedAt">) {
+  // `issuedAt` is minted by jose at signing time, never provided.
   const token = await signSession(payload);
   const store = await cookies();
   store.set(SESSION_COOKIE, token, {
@@ -39,6 +41,27 @@ export async function getSession(): Promise<SessionPayload | null> {
 export async function requireSession() {
   const session = await getSession();
   if (!session) redirect("/sign-in");
+
+  const db = getDb();
+  const [row] = await db
+    .select({ passwordChangedAt: users.passwordChangedAt })
+    .from(users)
+    .where(eq(users.id, session.userId))
+    .limit(1);
+
+  if (!row) {
+    // The account behind the cookie is gone (a reseed, a cascade delete).
+    // Cookie writes are not allowed while rendering, so a route handler
+    // clears the stale session before sending the user back to sign in.
+    redirect("/api/session/clear");
+  }
+
+  if (isSessionStale(new Date(session.issuedAt * 1000), row.passwordChangedAt)) {
+    // The session predates the account's last password change: it was minted
+    // under the old password and has lost its right to act.
+    redirect("/api/session/clear");
+  }
+
   return session;
 }
 

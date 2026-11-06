@@ -6,6 +6,8 @@ import {
   appointmentRescheduled,
   bookingConfirmed,
   followUpPrompt,
+  passwordChanged,
+  passwordResetRequest,
   paymentConfirmed,
   refundUpdate,
   reminder,
@@ -16,6 +18,7 @@ import {
 import { channelsFor, preferencesForUser } from "./preferences";
 import type { NotifyResult } from "./index";
 import type { RefundOutcome } from "@/lib/refunds/service";
+import { hashResetToken } from "@/lib/password";
 
 /**
  * Patient-facing notification events. Every function here is safe to call from
@@ -256,4 +259,57 @@ export async function sendFollowUpPrompt(
     // No idempotency key: the `care_follow_ups` table owns dedup for this event.
   });
   return deliveredTo(ctx, report);
+}
+
+/**
+ * Account-security emails. There is no appointment context to look up and no
+ * channel preference to honour: a reset link must reach the inbox even when
+ * the patient has switched email updates off, and the password-changed
+ * heads-up is the tamper alarm, not a preference. Both ride the same ledger
+ * (kinds `password_reset` / `password_changed`) for audit and are email-only.
+ *
+ * The expiry is every reset email's own truth: RESET_TOKEN_TTL_MINUTES just
+ * passed in, so the message cannot quietly promise a different lifetime than
+ * `lib/password.ts` enforces.
+ */
+export async function sendPasswordResetEmail(
+  to: string,
+  resetUrl: string,
+  options: { expiryMinutes: number },
+): Promise<NotifyResult> {
+  const content = passwordResetRequest({ resetUrl, expiryMinutes: options.expiryMinutes });
+
+  return notify(
+    {
+      to,
+      subject: content.subject,
+      text: content.text,
+      html: content.html,
+      meta: { kind: "password_reset" },
+    },
+    {
+      channel: "email",
+      // Each mint is a distinct credential, so a fresh request mails again;
+      // the digest keeps the raw link out of a second column.
+      idempotencyKey: `password_reset:${hashResetToken(resetUrl)}`,
+    },
+  );
+}
+
+export async function sendPasswordChangedEmail(to: string): Promise<NotifyResult> {
+  const content = passwordChanged();
+
+  return notify(
+    {
+      to,
+      subject: content.subject,
+      text: content.text,
+      html: content.html,
+      meta: { kind: "password_changed" },
+    },
+    // Deliberately no idempotency key: every real password change is its own
+    // event, and the single-use token claim already prevents one change from
+    // mailing twice. The daily sweep retries a failed row on its own.
+    { channel: "email" },
+  );
 }

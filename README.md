@@ -7,6 +7,7 @@ appear in their dashboard instantly.
 ## Features
 
 - **Authentication** — email/password signup and signin with role selection (patient / doctor), JWT session in an httpOnly cookie, role-guarded dashboards via middleware
+- **Password reset** — a "Forgot password?" flow: a single-use, hour-limited link (only its sha256 digest is stored) emailed through the same notification ledger, a generic response that never reveals whether an account exists, a 60-second request cooldown, and automatic sign-out of every session issued before the change. See [`docs/password-reset.md`](docs/password-reset.md)
 - **Doctor directory** — search by name or specialization, profile pages with fees, experience and weekly availability
 - **Doctor availability management** — doctors add or remove their own weekly windows from the dashboard; new doctors are seeded with a default Mon–Fri 09:00–13:00 schedule so they are bookable immediately; windows with upcoming bookings cannot be removed
 - **Live slot availability** — slots are generated from each doctor's availability windows (15/30/45/60-minute intervals), booked slots and past times are removed automatically; all comparisons use clinic time (Asia/Kolkata) so "today" is correct regardless of server time zone
