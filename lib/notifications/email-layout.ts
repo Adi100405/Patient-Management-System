@@ -26,6 +26,11 @@ export type EmailContent = {
   readonly cta?: EmailCta;
   /** Small print under the body, e.g. how to reschedule. */
   readonly footnote?: string;
+  /**
+   * The last automated-message line of the shell. Defaults to the
+   * appointment footer; account messages say something true about accounts.
+   */
+  readonly footerNote?: string;
 };
 
 // The app's own palette (app/globals.css). Email cannot read CSS variables, so
@@ -119,7 +124,7 @@ export function renderEmail(content: EmailContent): string {
           </tr>
           <tr>
             <td style="background-color:${CREAM_50};border-top:1px solid ${CREAM_200};padding:16px 28px;font-size:11px;line-height:1.6;color:${INK_500};">
-              This is an automated message about your Medrella appointment. Please do not reply to it.
+              ${escapeHtml(content.footerNote ?? "This is an automated message about your Medrella appointment. Please do not reply to it.")}
             </td>
           </tr>
         </table>

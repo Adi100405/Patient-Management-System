@@ -50,8 +50,42 @@ export const users = pgTable("users", {
   email: text("email").notNull().unique(),
   passwordHash: text("password_hash").notNull(),
   role: roleEnum("role").notNull(),
+  /**
+   * When the account's password last changed. A session token issued before
+   * this instant is rejected by the session guard, so a password reset (or a
+   * user-initiated change later) takes the account back in every browser —
+   * not just the one where the new password was typed.
+   */
+  passwordChangedAt: timestamp("password_changed_at", { withTimezone: true }),
   createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
 });
+
+/**
+ * One "send me a reset link" request. The row stores only the sha256 digest
+ * of the token the emailed link carries, so a read of this table cannot mint
+ * a usable reset link. A new request replaces the account's older rows
+ * (a link is single-use and the latest request wins), and a row is consumed —
+ * `used_at` — the moment it grants a password change.
+ */
+export const passwordResetTokens = pgTable(
+  "password_reset_tokens",
+  {
+    id: serial("id").primaryKey(),
+    userId: integer("user_id")
+      .notNull()
+      .references(() => users.id, { onDelete: "cascade" }),
+    /** sha256 of the URL token — hex, not the token itself. */
+    tokenHash: text("token_hash").notNull().unique(),
+    expiresAt: timestamp("expires_at", { withTimezone: true }).notNull(),
+    usedAt: timestamp("used_at", { withTimezone: true }),
+    createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+  },
+  (table) => [
+    // The request action reads "does this account have a recent request?" to
+    // enforce its cooldown, and the latest request wins over older ones.
+    index("password_reset_tokens_user_created_idx").on(table.userId, table.createdAt),
+  ],
+);
 
 export const patients = pgTable("patients", {
   id: serial("id").primaryKey(),
