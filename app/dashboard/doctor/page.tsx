@@ -247,6 +247,13 @@ export default async function DoctorDashboard() {
     .filter((row) => row.availabilityId !== null && row.total > 0)
     .map((row) => row.availabilityId as number);
 
+  // Per-window booked counts for the availability editor: the floor an
+  // elastic edit respects and the "N booked" a row shows next to its window.
+  const bookedCounts: Record<number, number> = {};
+  for (const row of bookedPerWindow) {
+    if (row.availabilityId !== null) bookedCounts[row.availabilityId] = row.total;
+  }
+
   return (
     <div className="space-y-6">
       <div className="flex flex-col gap-1">
@@ -287,7 +294,11 @@ export default async function DoctorDashboard() {
           </p>
         </CardHeader>
         <CardContent>
-          <AvailabilityManager windows={windows} lockedIds={lockedIds} />
+          <AvailabilityManager
+            windows={windows}
+            lockedIds={lockedIds}
+            bookedCounts={bookedCounts}
+          />
         </CardContent>
       </Card>
 

@@ -3,6 +3,7 @@ import { appointmentMailContext } from "./context";
 import {
   appointmentCancelled,
   appointmentRescheduled,
+  appointmentWindowChanged,
   bookingConfirmed,
   followUpPrompt,
   paymentConfirmed,
@@ -123,6 +124,27 @@ export async function sendRescheduleNotice(
     // Moving the same visit to the same slot twice is the same message; the
     // old slot in the key keeps A→B→A distinct from a repeated A→B.
     idempotencyKey: `appointment_rescheduled:${appointmentId}:${options.previousDate}T${options.previousTime}->${ctx.date}T${ctx.time}`,
+  });
+}
+
+/**
+ * A stream window's end moved under a booked visit. Called after the block row
+ * already carries the new end, so the context reads the new window; the old
+ * end travels in `options`. Only sent when the end actually changed — a start
+ * or capacity edit never moves the patient's visit.
+ */
+export async function sendWindowChangeNotice(
+  appointmentId: number,
+  options: { previousEnd: string },
+) {
+  const ctx = await contextFor(appointmentId);
+  if (!ctx) return;
+  const content = appointmentWindowChanged(ctx, options);
+  await deliver(ctx, content, {
+    kind: "appointment_window_changed",
+    // The old and new ends in the key keep shrinking-then-expanding distinct
+    // from a repeated edit, the same way the reschedule key carries both slots.
+    idempotencyKey: `appointment_window_changed:${appointmentId}:${options.previousEnd}->${ctx.visitEndTime}`,
   });
 }
 

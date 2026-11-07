@@ -104,15 +104,54 @@ lives in `blocksConflict` (`lib/schedule.ts`) and runs before the insert.
 A window that ends exactly when the next begins is fine — the overlap is
 half-open.
 
+## Elastic edits — shrinking and expanding a published window
+
+A published block is not frozen. From **Dashboard → Availability**, a doctor
+can **Edit** any block's start, end and capacity — shrinking a window
+(10:00 – 12:00 → 10:00 – 11:00), expanding it (→ 09:00 – 12:00), or changing
+how many patients it holds. A booked window cannot be *removed*, but it can
+always be edited: that is exactly what keeps its bookings standing.
+
+The rule underneath every edit: **a booked visit never moves.** Each visit's
+date, start time and seat live on the appointment row itself, and an edit may
+only change the block in ways that keep every upcoming booking valid where it
+stands:
+
+- **Wave** — every booked start time must still be a position of the edited
+  window (a visit that no longer fits before the end would strand its
+  patient), and the capacity may not drop below the busiest booked slot.
+  Shrinking the end past a booked visit is refused, naming the visit;
+  expanding is always safe.
+- **Stream** — every booking anchors to the window's start, so a booked
+  window's start cannot move at all. The end may shrink or expand freely —
+  each patient's seat and queue place ride along — and the capacity may not
+  drop below the busiest booked day.
+- **A block with no upcoming bookings** accepts any edit, subject to the same
+  field rules and the same overlap guard as a fresh block.
+
+The scheduling style and the visit length are fixed at publish time —
+regridding a wave's slots under booked visits would invent start times the
+clinic never promised.
+
+When a stream's end moves under booked visits, each of those patients receives
+an *appointment window changed* notice (email/SMS per their channel choices)
+carrying the previous and the new range; their start and queue place are
+untouched. Wave visits anchor to their own start, which did not move, so wave
+patients are told nothing.
+
+The check lives in `elasticEditConflict` (`lib/schedule.ts`) — pure, like the
+rest of the domain — and the action is `updateAvailability`
+(`actions/availability.ts`).
+
 ## Where the code lives
 
 | File | What it holds |
 |---|---|
 | `lib/schedule.ts` | The pure domain: positions, seats, conflicts, offers, window labels |
 | `lib/availability.ts` | Loads blocks (and their dates) from the database as domain blocks |
-| `lib/seats.ts` | Seat tallies per slot and per date range |
+| `lib/seats.ts` | Seat tallies per slot and per date range; upcoming bookings per block |
 | `lib/slots.ts` | The clinic clock (IST), so "today" is right on a UTC server |
-| `actions/availability.ts` | Publishing and removing blocks, with the overlap guard |
+| `actions/availability.ts` | Publishing, removing and elastically editing blocks, with the overlap and booked-visit guards |
 | `actions/booking.ts` | Booking and rescheduling, with seat allocation and retry |
 | `db/schema.ts` | `scheduling_type`, `capacity`, `availability_dates`, `seat_number`, the seat index |
 
@@ -171,3 +210,21 @@ inside the window to choose.
 The demo doctor also has a Tuesday series (three dates, capacity 2) and a single
 Saturday stream (one date). Both show up as extra day tabs on the profile page,
 and the Saturday block stops appearing once its date has passed.
+
+### Proving an elastic edit
+
+The seed books the demo patient into the doctor's Friday stream (seat 1), so
+the guards have something to guard.
+
+1. Sign in as `doctor@demo.com`, open **Dashboard → Availability**, and press
+   **Edit** on the Friday block. Change its end (16:00–19:00 → 16:00–18:00)
+   and save. The edit lands, the patient's dashboard and the doctor's schedule
+   read the new range, and the patient receives a *visit window changed*
+   notice. Their queue place is unchanged.
+2. Try to move the same block's **start**. The edit is refused — bookings
+   anchor to the start.
+3. Book a Monday wave slot, then try to shrink the Monday block's end past it.
+   The edit is refused, naming the booked time; shrink it to a point that keeps
+   the booking, or expand it, and it saves.
+4. Edit an unbooked block any way you like — with nothing booked, it accepts
+   anything the field rules allow.

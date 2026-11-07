@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   blockAppliesOn,
   blocksConflict,
+  elasticEditConflict,
   offersFor,
   openDates,
   positionsFor,
@@ -408,5 +409,64 @@ describe("visitWhenLabel — how a visit reads in an appointment list", () => {
 
   it("falls back to the start time when a stream row has no window end", () => {
     expect(visitWhenLabel({ schedulingType: "stream", time: "10:00" })).toBe("10:00 AM");
+  });
+});
+
+describe("elasticEditConflict — shrinking or expanding a published window", () => {
+  it("accepts anything when the block has no upcoming bookings", () => {
+    expect(elasticEditConflict(wave(), wave({ startTime: "11:00" }), [])).toBeNull();
+    expect(elasticEditConflict(wave(), wave({ endTime: "10:30" }), [])).toBeNull();
+  });
+
+  it("accepts a wave expansion and a shrink that keeps every booked visit", () => {
+    const booked = [{ time: "10:30", seats: 2 }];
+
+    expect(elasticEditConflict(wave(), wave({ endTime: "13:00" }), booked)).toBeNull();
+    expect(elasticEditConflict(wave(), wave({ startTime: "09:00" }), booked)).toBeNull();
+    expect(elasticEditConflict(wave(), wave({ endTime: "11:00" }), booked)).toBeNull();
+  });
+
+  it("refuses a wave shrink that would strand a booked visit", () => {
+    expect(
+      elasticEditConflict(wave(), wave({ endTime: "11:00" }), [{ time: "11:30", seats: 1 }]),
+    ).toBe(
+      "11:30 AM is booked — the edited window no longer offers it. Reschedule or cancel that visit first.",
+    );
+    expect(
+      elasticEditConflict(wave(), wave({ startTime: "11:00" }), [{ time: "10:00", seats: 1 }]),
+    ).toBe(
+      "10:00 AM is booked — the edited window no longer offers it. Reschedule or cancel that visit first.",
+    );
+  });
+
+  it("refuses a wave capacity below the busiest booked slot", () => {
+    const booked = [
+      { time: "10:00", seats: 2 },
+      { time: "10:30", seats: 1 },
+    ];
+
+    expect(elasticEditConflict(wave(), wave({ capacity: 1 }), booked)).toBe(
+      "Up to 2 patients are booked at 10:00 AM — capacity cannot go below that.",
+    );
+    expect(elasticEditConflict(wave(), wave({ capacity: 2 }), booked)).toBeNull();
+  });
+
+  it("locks a booked stream window's start but lets its end move freely", () => {
+    const booked = [{ time: "10:00", seats: 3 }];
+
+    expect(elasticEditConflict(stream(), stream({ startTime: "10:30" }), booked)).toBe(
+      "Patients are booked in this window — its start cannot move. Reschedule or cancel those visits first.",
+    );
+    expect(elasticEditConflict(stream(), stream({ endTime: "11:00" }), booked)).toBeNull();
+    expect(elasticEditConflict(stream(), stream({ endTime: "13:00" }), booked)).toBeNull();
+  });
+
+  it("refuses a stream capacity below its busiest booked day", () => {
+    const booked = [{ time: "10:00", seats: 3 }];
+
+    expect(elasticEditConflict(stream(), stream({ capacity: 2 }), booked)).toBe(
+      "Up to 3 patients are booked in this window — capacity cannot go below that.",
+    );
+    expect(elasticEditConflict(stream(), stream({ capacity: 3 }), booked)).toBeNull();
   });
 });

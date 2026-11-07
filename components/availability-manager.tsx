@@ -7,6 +7,7 @@ import {
   removeAvailability,
   type AvailabilityState,
 } from "@/actions/availability";
+import { AvailabilityEditForm } from "@/components/availability-edit-form";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -42,15 +43,21 @@ const selectClass =
 export function AvailabilityManager({
   windows,
   lockedIds,
+  bookedCounts = {},
 }: {
   windows: AvailabilityRow[];
   lockedIds: number[];
+  /** Upcoming booked visits per window — the floor an elastic edit respects. */
+  bookedCounts?: Record<number, number>;
 }) {
   const [state, formAction, pending] = useActionState<AvailabilityState, FormData>(
     addAvailability,
     null,
   );
   const locked = new Set(lockedIds);
+
+  // One edit open at a time: the open form belongs to its row.
+  const [editingId, setEditingId] = useState<number | null>(null);
 
   const [type, setType] = useState<SchedulingType>("wave");
   const [recurrence, setRecurrence] = useState<"weekly" | "dates">("weekly");
@@ -90,6 +97,11 @@ export function AvailabilityManager({
                   key={window.id}
                   window={window}
                   locked={locked.has(window.id)}
+                  booked={bookedCounts[window.id] ?? 0}
+                  editing={editingId === window.id}
+                  onToggleEdit={() =>
+                    setEditingId(editingId === window.id ? null : window.id)
+                  }
                 />
               ))}
             </ul>
@@ -106,6 +118,11 @@ export function AvailabilityManager({
                     key={window.id}
                     window={window}
                     locked={locked.has(window.id)}
+                    booked={bookedCounts[window.id] ?? 0}
+                    editing={editingId === window.id}
+                    onToggleEdit={() =>
+                      setEditingId(editingId === window.id ? null : window.id)
+                    }
                   />
                 ))}
               </ul>
@@ -302,40 +319,74 @@ export function AvailabilityManager({
   );
 }
 
-/** One published block: when it applies, how it is styled and how many it holds. */
-function BlockRow({ window, locked }: { window: AvailabilityRow; locked: boolean }) {
+/**
+ * One published block: when it applies, how it is styled and how many it holds.
+ *
+ * A booked window cannot be removed, but it can still be edited — shrinking or
+ * expanding it is exactly what keeps booked visits standing — so the Edit
+ * affordance stays available on locked rows.
+ */
+function BlockRow({
+  window,
+  locked,
+  booked,
+  editing,
+  onToggleEdit,
+}: {
+  window: AvailabilityRow;
+  locked: boolean;
+  booked: number;
+  editing: boolean;
+  onToggleEdit: () => void;
+}) {
   return (
-    <li className="flex flex-col gap-2 rounded-xl border border-cream-200 p-3 sm:flex-row sm:items-center sm:justify-between">
-      <div className="min-w-0">
-        <p className="text-sm font-medium text-ink-900">
-          {window.dayOfWeek !== null
-            ? `${DAYS[window.dayOfWeek]} · ${formatTime(window.startTime)} – ${formatTime(window.endTime)}`
-            : `${formatTime(window.startTime)} – ${formatTime(window.endTime)}`}
-        </p>
-        <p className="text-xs text-ink-500">
-          {window.schedulingType === "wave"
-            ? `Wave · ${window.capacity} ${window.capacity === 1 ? "patient" : "patients"} per slot · ${window.slotMinutes} min visit`
-            : `Stream · ${window.capacity} ${window.capacity === 1 ? "patient" : "patients"} in this window`}
-        </p>
-        {window.dates.length > 0 && (
-          <p className="mt-0.5 text-xs text-ink-500">
-            {window.dates.map((date) => formatDate(date)).join(", ")}
+    <li className="flex flex-col gap-2 rounded-xl border border-cream-200 p-3">
+      <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+        <div className="min-w-0">
+          <p className="text-sm font-medium text-ink-900">
+            {window.dayOfWeek !== null
+              ? `${DAYS[window.dayOfWeek]} · ${formatTime(window.startTime)} – ${formatTime(window.endTime)}`
+              : `${formatTime(window.startTime)} – ${formatTime(window.endTime)}`}
           </p>
-        )}
+          <p className="text-xs text-ink-500">
+            {window.schedulingType === "wave"
+              ? `Wave · ${window.capacity} ${window.capacity === 1 ? "patient" : "patients"} per slot · ${window.slotMinutes} min visit`
+              : `Stream · ${window.capacity} ${window.capacity === 1 ? "patient" : "patients"} in this window`}
+            {booked > 0 ? ` · ${booked} booked` : ""}
+          </p>
+          {window.dates.length > 0 && (
+            <p className="mt-0.5 text-xs text-ink-500">
+              {window.dates.map((date) => formatDate(date)).join(", ")}
+            </p>
+          )}
+        </div>
+
+        <div className="flex shrink-0 items-center gap-2">
+          <Button
+            variant="outline"
+            size="sm"
+            type="button"
+            onClick={onToggleEdit}
+            aria-expanded={editing}
+          >
+            {editing ? "Close" : "Edit"}
+          </Button>
+          {locked ? (
+            <span className="text-xs font-medium text-ink-500">
+              Has upcoming bookings — cancel them to remove
+            </span>
+          ) : (
+            <form action={removeAvailability}>
+              <input type="hidden" name="availabilityId" value={window.id} />
+              <Button variant="outline" size="sm" type="submit">
+                Remove
+              </Button>
+            </form>
+          )}
+        </div>
       </div>
 
-      {locked ? (
-        <span className="text-xs font-medium text-ink-500">
-          Has upcoming bookings — cancel them to remove
-        </span>
-      ) : (
-        <form action={removeAvailability}>
-          <input type="hidden" name="availabilityId" value={window.id} />
-          <Button variant="outline" size="sm" type="submit">
-            Remove
-          </Button>
-        </form>
-      )}
+      {editing && <AvailabilityEditForm window={window} onDone={onToggleEdit} />}
     </li>
   );
 }

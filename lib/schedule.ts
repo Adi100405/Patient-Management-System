@@ -169,6 +169,59 @@ function shareADate(a: ScheduleBlock, b: ScheduleBlock): boolean {
   return a.dates.some((date) => b.dates.includes(date));
 }
 
+/**
+ * One booked start time inside a block, and the most patients holding it on
+ * any single upcoming date — the floor a capacity edit may not go under.
+ */
+export type BookedTime = {
+  readonly time: string;
+  readonly seats: number;
+};
+
+/**
+ * Why a doctor's proposed edit to a block's window cannot stand, or null when
+ * the edit is safe for every upcoming booking.
+ *
+ * Wave: every booked start must still be a position of the edited rules, and
+ * no position may hold more booked patients than the new capacity — a visit
+ * that is booked but no longer offered would strand the patient. Stream: every
+ * booking anchors to the window's start, so a booked window's start cannot
+ * move, and the window cannot hold fewer patients than its busiest day
+ * already does. A block with no upcoming bookings accepts anything.
+ */
+export function elasticEditConflict(
+  current: ScheduleRules,
+  candidate: ScheduleRules,
+  booked: readonly BookedTime[],
+): string | null {
+  if (booked.length === 0) return null;
+
+  if (candidate.schedulingType === "stream") {
+    if (candidate.startTime !== current.startTime) {
+      return "Patients are booked in this window — its start cannot move. Reschedule or cancel those visits first.";
+    }
+    const busiest = Math.max(...booked.map((visit) => visit.seats));
+    if (busiest > candidate.capacity) {
+      return `Up to ${busiest} ${busiest === 1 ? "patient is" : "patients are"} booked in this window — capacity cannot go below that.`;
+    }
+    return null;
+  }
+
+  const positions = new Map(
+    positionsFor(candidate).map((position) => [position.time, position.seats]),
+  );
+  for (const visit of booked) {
+    const seats = positions.get(visit.time);
+    if (seats === undefined) {
+      return `${formatTime(visit.time)} is booked — the edited window no longer offers it. Reschedule or cancel that visit first.`;
+    }
+    if (visit.seats > seats) {
+      return `Up to ${visit.seats} ${visit.seats === 1 ? "patient is" : "patients are"} booked at ${formatTime(visit.time)} — capacity cannot go below that.`;
+    }
+  }
+  return null;
+}
+
 /** A date a patient might be offered, with the weekday it falls on. */
 export type DateCandidate = {
   readonly date: string;

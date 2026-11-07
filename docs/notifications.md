@@ -273,6 +273,7 @@ message.
 | Payment confirmed | A capture is first recorded (checkout or webhook) | `payment_confirmed:<id>` |
 | Appointment cancelled | Patient, doctor or expired checkout | `appointment_cancelled:<id>` |
 | Appointment rescheduled | Slot move succeeds | `appointment_rescheduled:<id>:<old>→<new>` |
+| Appointment window changed | A doctor's elastic edit moves a booked stream window's end | `appointment_window_changed:<id>:<old end>→<new end>` |
 | Refund initiated / completed / failed | Refund state transitions | `refund_<stage>:<id>` |
 | Reminder (24h / 1h) | Reminder sweep finds a due window | none — the `reminders` table owns reminder dedup |
 | Visit thanks | Care sweep finds a recently completed visit | none — the `care_follow_ups` table owns dedup |

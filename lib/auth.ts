@@ -1,6 +1,11 @@
 import bcrypt from "bcryptjs";
 import { z } from "zod";
-import { MAX_BLOCK_DATES, MAX_CAPACITY, SCHEDULING_TYPES } from "@/lib/schedule";
+import {
+  MAX_BLOCK_DATES,
+  MAX_CAPACITY,
+  SCHEDULING_TYPES,
+  type SchedulingType,
+} from "@/lib/schedule";
 import { toMinutes } from "@/lib/slots";
 
 export const signUpSchema = z.object({
@@ -95,6 +100,48 @@ export const availabilitySchema = z
       }
     }
   });
+
+/**
+ * An edit to a published block's window: the block, its new bounds, and its
+ * new capacity.
+ *
+ * The scheduling type and visit length are fixed when the block is created —
+ * reshaping a wave's slot grid could strand booked visits mid-grid — so only
+ * the window bounds and the capacity are elastic. The type is passed in
+ * because the block keeps the one it was published with.
+ */
+export function availabilityEditSchema(schedulingType: SchedulingType) {
+  return z
+    .object({
+      availabilityId: z.coerce.number().int().positive(),
+      startTime: clockTime,
+      endTime: clockTime,
+      capacity: z.coerce
+        .number()
+        .int()
+        .min(1, "At least one patient")
+        .max(MAX_CAPACITY, `At most ${MAX_CAPACITY} patients`),
+    })
+    .superRefine((value, ctx) => {
+      if (value.startTime >= value.endTime) {
+        ctx.addIssue({
+          code: "custom",
+          path: ["endTime"],
+          message: "End time must be after the start time",
+        });
+      }
+      if (schedulingType === "stream") {
+        const windowMinutes = toMinutes(value.endTime) - toMinutes(value.startTime);
+        if (value.capacity > windowMinutes) {
+          ctx.addIssue({
+            code: "custom",
+            path: ["capacity"],
+            message: "A stream cannot hold more patients than the window has minutes",
+          });
+        }
+      }
+    });
+}
 
 export async function hashPassword(password: string) {
   return bcrypt.hash(password, 10);

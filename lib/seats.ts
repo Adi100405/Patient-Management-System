@@ -66,3 +66,40 @@ export async function takenSeatsByTime(options: {
 
   return tally;
 }
+
+export type BookedAppointmentRow = {
+  readonly id: number;
+  readonly date: string;
+  readonly time: string;
+  readonly seatNumber: number;
+};
+
+/**
+ * Every upcoming booked visit attached to one availability block.
+ *
+ * This is the list an elastic edit has to respect: the block may only change
+ * in ways that keep each of these visits bookable exactly where it stands.
+ * Past and cancelled visits are ignored — the window's history is not the
+ * window's shape.
+ */
+export async function bookedUpcomingForAvailability(
+  availabilityId: number,
+  fromDate: string,
+): Promise<readonly BookedAppointmentRow[]> {
+  const db = getDb();
+  return db
+    .select({
+      id: appointments.id,
+      date: appointments.appointmentDate,
+      time: appointments.appointmentTime,
+      seatNumber: appointments.seatNumber,
+    })
+    .from(appointments)
+    .where(
+      and(
+        eq(appointments.availabilityId, availabilityId),
+        eq(appointments.status, "booked"),
+        gte(appointments.appointmentDate, fromDate),
+      ),
+    );
+}
