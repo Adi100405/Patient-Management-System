@@ -325,7 +325,8 @@ export default async function DoctorProfilePage({
               </span>
             </div>
             <p className="text-sm text-ink-500">
-              Pick a day, then choose a free slot. A wave slot holds several patients.
+              Pick a day, then choose a free slot. A wave slot holds several patients. A
+              stream window books as one start–end range.
             </p>
           </CardHeader>
           <CardContent className="space-y-5">

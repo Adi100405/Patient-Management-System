@@ -187,7 +187,7 @@ export function BookingPanel({
         <div key={activeDay.date} className="animate-fade-up space-y-4">
           {activeDay.slots.length === 0 ? (
             <p className="rounded-xl border border-cream-200 bg-cream-50/70 p-4 text-sm text-ink-600">
-              No free slots left for {formatDate(activeDay.date)}. Try another day.
+              No free places left for {formatDate(activeDay.date)}. Try another day.
             </p>
           ) : (
             <div className="grid grid-cols-3 gap-2">
@@ -287,7 +287,7 @@ export function BookingPanel({
               </Button>
             </form>
           ) : (
-            <p className="text-sm text-ink-500">Pick a slot above to continue.</p>
+            <p className="text-sm text-ink-500">Pick a slot or window above to continue.</p>
           )}
         </div>
       )}

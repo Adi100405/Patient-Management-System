@@ -232,7 +232,7 @@ export function RescheduleAppointment({
         </div>
       ) : (
         <p className="rounded-xl border border-cream-200 bg-white p-3.5 text-xs text-ink-500">
-          No free slots on this day. Try another day.
+          No free places on this day. Try another day.
         </p>
       )}
 
@@ -266,7 +266,7 @@ export function RescheduleAppointment({
           {pending ? "Moving your appointment…" : "Confirm new slot"}
         </Button>
       ) : (
-        <p className="text-center text-xs text-ink-500">Pick a free slot above to confirm.</p>
+        <p className="text-center text-xs text-ink-500">Pick a slot or window above to confirm.</p>
       )}
       </form>
     </>
