@@ -6,15 +6,20 @@ export const metadata = { title: "Sign in — Medrella" };
 export default async function SignInPage({
   searchParams,
 }: {
-  searchParams: Promise<{ expired?: string }>;
+  searchParams: Promise<{ expired?: string; reset?: string }>;
 }) {
-  const { expired } = await searchParams;
+  const { expired, reset } = await searchParams;
 
   return (
     <div className="mx-auto max-w-md py-6">
       {expired && (
         <p className="mb-4 rounded-xl border border-amber-200 bg-amber-50 p-3 text-sm text-amber-800">
           Your session is no longer valid. Please sign in again.
+        </p>
+      )}
+      {reset && (
+        <p className="mb-4 rounded-xl border border-teal-200 bg-teal-50 p-3 text-sm text-teal-800">
+          Your password has been updated. Sign in with the new one.
         </p>
       )}
 
