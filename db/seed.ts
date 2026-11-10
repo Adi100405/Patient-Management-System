@@ -9,6 +9,7 @@ import {
   availabilityDates,
   doctors,
   patients,
+  payments,
   users,
 } from "../db/schema";
 import { streamSpacing } from "../lib/schedule";
@@ -75,8 +76,8 @@ function wave(
 }
 
 /**
- * A stream: patients are spread through the window, so the capacity counts
- * patients in the window and the spacing between them is derived.
+ * A stream: the window books as one start–end item, so the capacity counts
+ * patients in the window and the spacing is derived at publish time.
  */
 function stream(
   dayOfWeek: number,
@@ -252,6 +253,9 @@ async function main() {
 
   console.log("Creating doctors and availability…");
   const doctorIds: number[] = [];
+  // The demo doctor's Friday stream, captured so the seed can book a visit in
+  // it — a booked window is what the elastic-edit guards stand on.
+  let fridayStreamId: number | undefined;
 
   for (const seed of DOCTORS) {
     const [user] = await db
@@ -288,6 +292,10 @@ async function main() {
         })
         .returning({ id: availability.id });
 
+      if (seed.email === "doctor@demo.com" && block.schedulingType === "stream" && block.dayOfWeek === 5) {
+        fridayStreamId = created!.id;
+      }
+
       if (block.dates.length > 0) {
         await db.insert(availabilityDates).values(
           block.dates.map((date) => ({ availabilityId: created!.id, date })),
@@ -323,6 +331,36 @@ async function main() {
       reason: "Follow-up for palpitations",
     },
   ]);
+
+  if (fridayStreamId) {
+    console.log("Booking the demo patient into the Friday stream…");
+    const [fridayVisit] = await db
+      .insert(appointments)
+      .values({
+        patientId: patient!.id,
+        doctorId: doctorIds[0]!,
+        availabilityId: fridayStreamId,
+        // The next Friday the stream runs, so the booking is always upcoming.
+        appointmentDate: upcomingDates(5, 1)[0]!,
+        appointmentTime: "16:00",
+        seatNumber: 1,
+        status: "booked",
+        reason: "Chest pain follow-up",
+      })
+      .returning({ id: appointments.id });
+
+    // Settled the pay-at-clinic way, so the visit carries a receipt.
+    await db.insert(payments).values({
+      appointmentId: fridayVisit!.id,
+      patientId: patient!.id,
+      doctorId: doctorIds[0]!,
+      amount: "800.00",
+      currency: "INR",
+      status: "succeeded",
+      provider: "manual",
+      paidAt: new Date(),
+    });
+  }
 
   console.log("Seed complete.");
   console.log("  Patient  → patient@demo.com / password123");

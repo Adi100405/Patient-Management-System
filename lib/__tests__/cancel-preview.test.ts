@@ -43,6 +43,12 @@ describe("describeCancellation — what the confirm dialog promises", () => {
     expect(result.detail).toContain("clinic");
   });
 
+  it("keeps the full refund when the patient cancels a clinic-moved visit", () => {
+    const result = preview({ date: "2026-11-01", time: "12:00", clinicMoved: true });
+    expect(result.percentage).toBe(100);
+    expect(result.detail).toContain("clinic");
+  });
+
   it("says there is nothing to refund when no money was captured", () => {
     expect(preview({ paymentStatus: "pending", paymentProvider: "razorpay" }).headline).toBe(
       "No payment captured",

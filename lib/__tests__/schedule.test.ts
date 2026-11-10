@@ -7,6 +7,8 @@ import {
   positionsFor,
   seatFor,
   streamSpacing,
+  visitWhenLabel,
+  windowIsClosed,
   type ScheduleBlock,
 } from "@/lib/schedule";
 
@@ -64,35 +66,7 @@ describe("positionsFor — wave blocks", () => {
   });
 });
 
-describe("positionsFor — stream blocks", () => {
-  it("spreads the capacity evenly across the window", () => {
-    const positions = positionsFor(stream());
-
-    expect(positions.map((p) => p.time)).toEqual(["10:00", "10:24", "10:48", "11:12", "11:36"]);
-  });
-
-  it("gives every stream position a single seat", () => {
-    const positions = positionsFor(stream());
-
-    expect(positions.map((p) => p.seats)).toEqual([1, 1, 1, 1, 1]);
-  });
-
-  it("offers one position when the capacity is one", () => {
-    const positions = positionsFor(stream({ capacity: 1, slotMinutes: streamSpacing("10:00", "12:00", 1) }));
-
-    expect(positions.map((p) => p.time)).toEqual(["10:00"]);
-  });
-
-  it("keeps the last position inside the window", () => {
-    const positions = positionsFor(
-      stream({ capacity: 3, slotMinutes: streamSpacing("10:00", "12:00", 3) }),
-    );
-
-    expect(positions.map((p) => p.time)).toEqual(["10:00", "10:40", "11:20"]);
-  });
-});
-
-describe("streamSpacing — the derived distance between stream positions", () => {
+describe("streamSpacing — the publish-time spacing of a stream window", () => {
   it("divides the window by the capacity", () => {
     expect(streamSpacing("10:00", "12:00", 5)).toBe(24);
   });
@@ -125,6 +99,12 @@ describe("seatFor — which seat a new patient takes", () => {
 
   it("returns nothing when the slot has a single seat and it is taken", () => {
     expect(seatFor([1], 1)).toBeNull();
+  });
+
+  it("counts live rows, so a sparse high seat number cannot overbook", () => {
+    // A capacity shrink can keep three patients whose numbers are 2, 4 and 5.
+    // The gap at 1 and 3 must not be read as spare capacity.
+    expect(seatFor([2, 4, 5], 3)).toBeNull();
   });
 });
 
@@ -191,6 +171,13 @@ describe("blocksConflict — two blocks may not cover the same clock time on the
     const b = wave({ dayOfWeek: null, dates: ["2026-11-19"] });
 
     expect(blocksConflict(a, b)).toBe(false);
+  });
+
+  it("ignores a closed window when judging overlap", () => {
+    const closed = wave({ startTime: "10:00", endTime: "10:00" });
+
+    expect(blocksConflict(closed, wave({ startTime: "09:00", endTime: "12:00" }))).toBe(false);
+    expect(blocksConflict(wave({ startTime: "09:00", endTime: "12:00" }), closed)).toBe(false);
   });
 });
 
@@ -296,7 +283,29 @@ describe("offersFor — what a patient can book on one date", () => {
     ).toHaveLength(4);
   });
 
-  it("carries the block's identity and style onto every offer", () => {
+  it("closes once the window's start has passed", () => {
+    const offers = offersFor({
+      blocks: [stream({ id: 3, capacity: 5 })],
+      date: "2026-11-02",
+      takenSeats: new Map(),
+      now: { date: "2026-11-02", minutes: 600 },
+    });
+
+    expect(offers).toEqual([]);
+  });
+
+  it("offers a stream window once with its full start–end span, not per-position times", () => {
+    const offers = offersFor({
+      blocks: [stream({ id: 3, capacity: 5 })],
+      date: monday,
+      takenSeats: new Map(),
+      now: { date: "2026-11-01", minutes: 0 },
+    });
+
+    expect(offers.map((offer) => [offer.time, offer.endTime])).toEqual([["10:00", "12:00"]]);
+  });
+
+  it("carries the block's identity and window span onto the offer", () => {
     const offers = offersFor({
       blocks: [stream({ id: 3, capacity: 2, slotMinutes: 60 })],
       date: monday,
@@ -306,10 +315,61 @@ describe("offersFor — what a patient can book on one date", () => {
 
     expect(offers[0]).toMatchObject({
       time: "10:00",
+      endTime: "12:00",
       availabilityId: 3,
       schedulingType: "stream",
-      seats: 1,
+      seats: 2,
     });
+  });
+
+  it("counts the patients already booked into the window, tallied at its start", () => {
+    const offers = offersFor({
+      blocks: [stream({ id: 3, capacity: 5 })],
+      date: monday,
+      takenSeats: new Map([["10:00", 2]]),
+      now: { date: "2026-11-01", minutes: 0 },
+    });
+
+    expect(offers[0]).toMatchObject({
+      time: "10:00",
+      endTime: "12:00",
+      seats: 5,
+      taken: 2,
+      free: 3,
+    });
+  });
+
+  it("leaves nothing free once the window's capacity is fully booked", () => {
+    const offers = offersFor({
+      blocks: [stream({ id: 3, capacity: 5 })],
+      date: monday,
+      takenSeats: new Map([["10:00", 5]]),
+      now: { date: "2026-11-01", minutes: 0 },
+    });
+
+    expect(offers[0]?.free).toBe(0);
+  });
+
+  it("offers a dated stream window only on one of its dates", () => {
+    const block = stream({ id: 5, dayOfWeek: null, dates: ["2026-11-09"] });
+
+    expect(
+      offersFor({
+        blocks: [block],
+        date: monday,
+        takenSeats: new Map(),
+        now: { date: "2026-11-01", minutes: 0 },
+      }),
+    ).toEqual([]);
+
+    const windowOffers = offersFor({
+      blocks: [block],
+      date: "2026-11-09",
+      takenSeats: new Map(),
+      now: { date: "2026-11-01", minutes: 0 },
+    });
+
+    expect(windowOffers.map((offer) => [offer.time, offer.endTime])).toEqual([["10:00", "12:00"]]);
   });
 });
 
@@ -346,5 +406,51 @@ describe("openDates — the dates a patient may book", () => {
 
   it("keeps nothing when there are no blocks", () => {
     expect(openDates([], candidates)).toEqual([]);
+  });
+
+  it("hides the dates of a closed window", () => {
+    const open = openDates(
+      [wave({ dayOfWeek: 1, startTime: "10:00", endTime: "10:00" })],
+      candidates,
+    );
+
+    expect(open).toEqual([]);
+  });
+});
+
+describe("visitWhenLabel — how a visit reads in an appointment list", () => {
+  it("reads a stream visit as one start–end range", () => {
+    expect(
+      visitWhenLabel({ schedulingType: "stream", time: "10:00", windowEnd: "12:00" }),
+    ).toBe("10:00 AM – 12:00 PM");
+  });
+
+  it("reads a wave visit as its own start time", () => {
+    expect(visitWhenLabel({ schedulingType: "wave", time: "10:30" })).toBe("10:30 AM");
+  });
+
+  it("falls back to the start time when a stream row has no window end", () => {
+    expect(visitWhenLabel({ schedulingType: "stream", time: "10:00" })).toBe("10:00 AM");
+  });
+});
+
+describe("windowIsClosed — a published window with no slots", () => {
+  it("treats equal bounds as closed", () => {
+    expect(windowIsClosed(wave({ startTime: "10:00", endTime: "10:00" }))).toBe(true);
+  });
+
+  it("treats a normal window as open", () => {
+    expect(windowIsClosed(wave({ startTime: "10:00", endTime: "10:01" }))).toBe(false);
+  });
+
+  it("offers no stream window once it is closed", () => {
+    const offers = offersFor({
+      blocks: [stream({ startTime: "10:00", endTime: "10:00" })],
+      date: "2026-11-02",
+      takenSeats: new Map(),
+      now: { date: "2026-11-01", minutes: 0 },
+    });
+
+    expect(offers).toEqual([]);
   });
 });

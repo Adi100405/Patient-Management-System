@@ -120,3 +120,9 @@ export function upcomingDays(count = 7): DayOption[] {
 export function dayOfWeekFor(date: string) {
   return utcDate(date).getUTCDay();
 }
+
+/** "2026-11-04" + 3 -> "2026-11-07", independent of the server's time zone. */
+export function addDays(date: string, days: number) {
+  const next = new Date(utcDate(date).getTime() + days * 86_400_000);
+  return next.toISOString().slice(0, 10);
+}

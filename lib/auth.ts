@@ -1,6 +1,11 @@
 import bcrypt from "bcryptjs";
 import { z } from "zod";
-import { MAX_BLOCK_DATES, MAX_CAPACITY, SCHEDULING_TYPES } from "@/lib/schedule";
+import {
+  MAX_BLOCK_DATES,
+  MAX_CAPACITY,
+  SCHEDULING_TYPES,
+  type SchedulingType,
+} from "@/lib/schedule";
 import { toMinutes } from "@/lib/slots";
 
 export const signUpSchema = z.object({
@@ -18,6 +23,22 @@ export const signInSchema = z.object({
   email: z.string().trim().email("Enter a valid email address"),
   password: z.string().min(1, "Password is required"),
 });
+
+export const forgotPasswordSchema = z.object({
+  email: z.string().trim().email("Enter a valid email address"),
+});
+
+export const resetPasswordSchema = z
+  .object({
+    /** The one credential inside the emailed link, carried here hidden. */
+    token: z.string().min(1, "This reset link is incomplete — request a fresh one"),
+    password: z.string().min(6, "Password must be at least 6 characters"),
+    confirmPassword: z.string().min(1, "Confirm your new password"),
+  })
+  .refine((value) => value.password === value.confirmPassword, {
+    message: "Passwords do not match",
+    path: ["confirmPassword"],
+  });
 
 export const bookingSchema = z.object({
   doctorId: z.coerce.number().int().positive(),
@@ -40,9 +61,8 @@ const isoDate = z.string().regex(/^\d{4}-\d{2}-\d{2}$/, "Pick a valid date");
  * weekday, a date-based block lists the dates it opens on. One listed date
  * makes the block non-recurring; several make it a recurring series.
  *
- * The visit length belongs to a wave only — a stream derives the distance
- * between its positions from the capacity, so the field is not part of its
- * contract.
+ * The visit length belongs to a wave only — a stream books its window as one
+ * start–end item, so the field is not part of its contract.
  */
 export const availabilitySchema = z
   .object({
@@ -67,11 +87,13 @@ export const availabilitySchema = z
       .max(MAX_CAPACITY, `At most ${MAX_CAPACITY} patients`),
   })
   .superRefine((value, ctx) => {
-    if (value.startTime >= value.endTime) {
+    // Equal bounds are allowed and mean "closed": the block stays published,
+    // keeps its history, and offers no slots. Only a backwards window is bad.
+    if (value.startTime > value.endTime) {
       ctx.addIssue({
         code: "custom",
         path: ["endTime"],
-        message: "End time must be after the start time",
+        message: "End time cannot be before the start time",
       });
     }
     if (value.recurrence === "weekly" && value.dayOfWeek === undefined) {
@@ -83,19 +105,65 @@ export const availabilitySchema = z
     if (value.schedulingType === "wave" && value.slotMinutes === undefined) {
       ctx.addIssue({ code: "custom", path: ["slotMinutes"], message: "Pick a visit length" });
     }
-    if (value.schedulingType === "stream") {
-      // A stream positions its patients one minute apart at the tightest, so a
-      // window that is shorter than the capacity could never fit them all.
+    if (value.schedulingType === "stream" && value.startTime < value.endTime) {
+      // A stream takes one patient per minute of window at the tightest, so a
+      // window shorter than its capacity could never hold them all. A closed
+      // window is the exception: it holds nobody, and its stored capacity is
+      // only the shape it would have if reopened.
       const windowMinutes = toMinutes(value.endTime) - toMinutes(value.startTime);
       if (value.capacity > windowMinutes) {
         ctx.addIssue({
           code: "custom",
           path: ["capacity"],
-          message: "A stream cannot hold more than one patient per minute",
+          message: "A stream cannot hold more patients than the window has minutes",
         });
       }
     }
   });
+
+/**
+ * An edit to a published block's window: the block, its new bounds, and its
+ * new capacity.
+ *
+ * The scheduling type and visit length are fixed when the block is created —
+ * reshaping a wave's slot grid could strand booked visits mid-grid — so only
+ * the window bounds and the capacity are elastic. The type is passed in
+ * because the block keeps the one it was published with.
+ */
+export function availabilityEditSchema(schedulingType: SchedulingType) {
+  return z
+    .object({
+      availabilityId: z.coerce.number().int().positive(),
+      startTime: clockTime,
+      endTime: clockTime,
+      capacity: z.coerce
+        .number()
+        .int()
+        .min(1, "At least one patient")
+        .max(MAX_CAPACITY, `At most ${MAX_CAPACITY} patients`),
+    })
+    .superRefine((value, ctx) => {
+      // Equal bounds close the window. That is a legal edit: every not-started
+      // booking is displaced, and the block keeps its published history.
+      if (value.startTime > value.endTime) {
+        ctx.addIssue({
+          code: "custom",
+          path: ["endTime"],
+          message: "End time cannot be before the start time",
+        });
+      }
+      if (schedulingType === "stream" && value.startTime < value.endTime) {
+        const windowMinutes = toMinutes(value.endTime) - toMinutes(value.startTime);
+        if (value.capacity > windowMinutes) {
+          ctx.addIssue({
+            code: "custom",
+            path: ["capacity"],
+            message: "A stream cannot hold more patients than the window has minutes",
+          });
+        }
+      }
+    });
+}
 
 export async function hashPassword(password: string) {
   return bcrypt.hash(password, 10);
