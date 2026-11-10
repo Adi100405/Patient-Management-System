@@ -1,5 +1,7 @@
 import bcrypt from "bcryptjs";
 import { z } from "zod";
+import { MAX_BLOCK_DATES, MAX_CAPACITY, SCHEDULING_TYPES } from "@/lib/schedule";
+import { toMinutes } from "@/lib/slots";
 
 export const signUpSchema = z.object({
   name: z.string().trim().min(2, "Please enter your full name"),
@@ -29,19 +31,70 @@ const clockTime = z
   .string()
   .regex(/^([01]\d|2[0-3]):[0-5]\d$/, "Use a valid time like 09:30");
 
+const isoDate = z.string().regex(/^\d{4}-\d{2}-\d{2}$/, "Pick a valid date");
+
+/**
+ * A schedule block as the doctor form submits it.
+ *
+ * The block is weekly or date-based, never both: a weekly block names a
+ * weekday, a date-based block lists the dates it opens on. One listed date
+ * makes the block non-recurring; several make it a recurring series.
+ *
+ * The visit length belongs to a wave only — a stream derives the distance
+ * between its positions from the capacity, so the field is not part of its
+ * contract.
+ */
 export const availabilitySchema = z
   .object({
-    dayOfWeek: z.coerce.number().int().min(0, "Pick a day").max(6, "Pick a day"),
+    schedulingType: z.enum(SCHEDULING_TYPES),
+    recurrence: z.enum(["weekly", "dates"]),
+    dayOfWeek: z.coerce.number().int().min(0, "Pick a day").max(6, "Pick a day").optional(),
+    dates: z.array(isoDate).max(MAX_BLOCK_DATES, `Pick at most ${MAX_BLOCK_DATES} dates`),
     startTime: clockTime,
     endTime: clockTime,
     slotMinutes: z.coerce
       .number()
       .int()
-      .refine((value) => [15, 30, 45, 60].includes(value), "Slot length must be 15, 30, 45 or 60 minutes"),
+      .refine(
+        (value) => [15, 30, 45, 60].includes(value),
+        "Visit length must be 15, 30, 45 or 60 minutes",
+      )
+      .optional(),
+    capacity: z.coerce
+      .number()
+      .int()
+      .min(1, "At least one patient")
+      .max(MAX_CAPACITY, `At most ${MAX_CAPACITY} patients`),
   })
-  .refine((value) => value.startTime < value.endTime, {
-    message: "End time must be after the start time",
-    path: ["endTime"],
+  .superRefine((value, ctx) => {
+    if (value.startTime >= value.endTime) {
+      ctx.addIssue({
+        code: "custom",
+        path: ["endTime"],
+        message: "End time must be after the start time",
+      });
+    }
+    if (value.recurrence === "weekly" && value.dayOfWeek === undefined) {
+      ctx.addIssue({ code: "custom", path: ["dayOfWeek"], message: "Pick a day" });
+    }
+    if (value.recurrence === "dates" && value.dates.length === 0) {
+      ctx.addIssue({ code: "custom", path: ["dates"], message: "Pick at least one date" });
+    }
+    if (value.schedulingType === "wave" && value.slotMinutes === undefined) {
+      ctx.addIssue({ code: "custom", path: ["slotMinutes"], message: "Pick a visit length" });
+    }
+    if (value.schedulingType === "stream") {
+      // A stream positions its patients one minute apart at the tightest, so a
+      // window that is shorter than the capacity could never fit them all.
+      const windowMinutes = toMinutes(value.endTime) - toMinutes(value.startTime);
+      if (value.capacity > windowMinutes) {
+        ctx.addIssue({
+          code: "custom",
+          path: ["capacity"],
+          message: "A stream cannot hold more than one patient per minute",
+        });
+      }
+    }
   });
 
 export async function hashPassword(password: string) {

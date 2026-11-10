@@ -7,7 +7,18 @@ import { bookAppointment, type BookingState } from "@/actions/booking";
 import { Button } from "@/components/ui/button";
 import { PaymentCheckout } from "@/components/payment-checkout";
 import { Textarea } from "@/components/ui/textarea";
+import type { SchedulingType } from "@/lib/schedule";
 import { cn, formatDate, formatTime } from "@/lib/utils";
+
+export type BookingSlot = {
+  time: string;
+  availabilityId: number;
+  schedulingType: SchedulingType;
+  /** How many patients the slot holds in total. */
+  seats: number;
+  /** How many of those seats are still free. */
+  free: number;
+};
 
 export type BookingDay = {
   date: string;
@@ -15,7 +26,9 @@ export type BookingDay = {
   weekday: string;
   /** Short date, e.g. "2 Nov". */
   dayLabel: string;
-  slots: { time: string; availabilityId: number }[];
+  /** Every free seat on this day, across all its slots. */
+  freeSeats: number;
+  slots: BookingSlot[];
 };
 
 /**
@@ -24,7 +37,7 @@ export type BookingDay = {
  * Every day and its free slots arrive from the server in one pass, so switching
  * days is instant client state — no navigation, no round trip, no flash. The
  * only thing that reaches the server is the booking itself. The selected day is
- * mirrored into the URL with `replaceState` so the link stays shareable.
+ * mirrored into the URL so the link stays shareable.
  *
  * This replaces the old server-driven list, where every day switch was a full
  * navigation. The server action still re-validates the slot, so a race between
@@ -51,13 +64,23 @@ export function BookingPanel({
   const activeDay = days.find((day) => day.date === activeDate) ?? days[0];
   const selectedSlot = activeDay?.slots.find((slot) => slot.time === selected);
 
-  // Keep the URL shareable without asking the server to re-render.
+  // Keep the URL shareable without involving the Next router.
+  //
+  // Next.js patches `history.replaceState` so a URL change re-renders the
+  // server tree. For a client-side day picker that is the wrong trade: the
+  // round trip can land after the patient has already moved on, and the
+  // re-render resets the day that was just chosen. The native History API
+  // updates the address bar and nothing else — and because the URL then
+  // carries the chosen day, even a remount lands on the right day.
   useEffect(() => {
     const url = new URL(window.location.href);
-    if (url.searchParams.get("date") !== activeDate) {
-      url.searchParams.set("date", activeDate);
-      window.history.replaceState(null, "", url.toString());
-    }
+    if (url.searchParams.get("date") === activeDate) return;
+
+    url.searchParams.set("date", activeDate);
+    const nativeHistory = Object.getPrototypeOf(window.history) as {
+      replaceState: (data: unknown, title: string, url?: string | null) => void;
+    };
+    nativeHistory.replaceState.call(window.history, null, "", url.toString());
   }, [activeDate]);
 
   const chooseDay = (date: string) => {
@@ -115,7 +138,7 @@ export function BookingPanel({
         <div role="tablist" aria-label="Choose a day" className="flex gap-2 overflow-x-auto pb-1">
           {days.map((day) => {
             const isActive = day.date === activeDay?.date;
-            const isFull = day.slots.length === 0;
+            const isFull = day.freeSeats === 0;
             return (
               <button
                 key={day.date}
@@ -145,7 +168,7 @@ export function BookingPanel({
                     isActive ? "text-teal-50/90" : isFull ? "text-rose-500" : "text-teal-700",
                   )}
                 >
-                  {isFull ? "Full" : `${day.slots.length} free`}
+                  {isFull ? "Full" : `${day.freeSeats} free`}
                 </span>
               </button>
             );
@@ -168,15 +191,23 @@ export function BookingPanel({
                   type="button"
                   onClick={() => setSelected(slot.time)}
                   aria-pressed={selected === slot.time}
+                  aria-label={slotLabel(slot)}
                   className={cn(
-                    "inline-flex h-11 items-center justify-center gap-1 rounded-xl border px-2 text-xs font-medium tabular-nums transition duration-150 ease-out active:scale-[0.98]",
+                    "inline-flex h-12 flex-col items-center justify-center gap-0.5 rounded-xl border px-1 text-xs font-medium tabular-nums transition duration-150 ease-out active:scale-[0.98]",
                     selected === slot.time
                       ? "border-teal-700 bg-teal-700 text-white shadow-sm"
                       : "border-cream-300 bg-white text-ink-800 hover:border-teal-400 hover:bg-teal-50/60",
                   )}
                 >
-                  {selected === slot.time && <Check className="h-3.5 w-3.5" aria-hidden="true" />}
-                  {formatTime(slot.time)}
+                  <span className="inline-flex items-center gap-1">
+                    {selected === slot.time && <Check className="h-3 w-3" aria-hidden="true" />}
+                    {formatTime(slot.time)}
+                  </span>
+                  {slotNote(slot) && (
+                    <span className="text-[9px] font-semibold uppercase tracking-wide opacity-75">
+                      {slotNote(slot)}
+                    </span>
+                  )}
                 </button>
               ))}
             </div>
@@ -219,4 +250,23 @@ export function BookingPanel({
       )}
     </div>
   );
+}
+
+/**
+ * The note under a slot: how many places are left in a wave, or the style of a
+ * stream position. A wave with room for one patient needs no note — it reads
+ * as a plain appointment.
+ */
+function slotNote(slot: BookingSlot) {
+  if (slot.schedulingType === "stream") return "Stream";
+  if (slot.seats > 1) return `${slot.free} left`;
+  return null;
+}
+
+/** What a screen reader hears for a slot, seats included. */
+function slotLabel(slot: BookingSlot) {
+  const time = formatTime(slot.time);
+  if (slot.schedulingType === "stream") return `${time} — stream appointment`;
+  if (slot.seats > 1) return `${time} — ${slot.free} of ${slot.seats} places left`;
+  return time;
 }
