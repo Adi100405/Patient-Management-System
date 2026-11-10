@@ -2,6 +2,8 @@ import { notify } from "./index";
 import { appointmentMailContext } from "./context";
 import {
   appointmentCancelled,
+  appointmentClinicMoved,
+  appointmentNeedsRebooking,
   appointmentRescheduled,
   appointmentWindowChanged,
   bookingConfirmed,
@@ -15,6 +17,7 @@ import {
 } from "./templates";
 import { channelsFor, preferencesForUser } from "./preferences";
 import type { NotifyResult } from "./index";
+import type { DisplacementReason } from "@/lib/displacement";
 import type { RefundOutcome } from "@/lib/refunds/service";
 
 /**
@@ -145,6 +148,45 @@ export async function sendWindowChangeNotice(
     // The old and new ends in the key keep shrinking-then-expanding distinct
     // from a repeated edit, the same way the reschedule key carries both slots.
     idempotencyKey: `appointment_window_changed:${appointmentId}:${options.previousEnd}->${ctx.visitEndTime}`,
+  });
+}
+
+/**
+ * The clinic moved a displaced visit into a new published slot. Sent after the
+ * appointment row carries its new date and time; the old slot travels in
+ * `options`. The message names the change as the clinic's, but preserves the
+ * patient's keep / reschedule / cancel choices.
+ */
+export async function sendClinicMoveNotice(
+  appointmentId: number,
+  options: {
+    previousDate: string;
+    previousTime: string;
+    reason: DisplacementReason;
+  },
+) {
+  const ctx = await contextFor(appointmentId);
+  if (!ctx) return;
+  const content = appointmentClinicMoved(ctx, options);
+  await deliver(ctx, content, {
+    kind: "appointment_clinic_moved",
+    // Old and new slots both appear in the key, so an A→B→A sequence is two
+    // real moves rather than one duplicate message.
+    idempotencyKey: `appointment_clinic_moved:${appointmentId}:${options.previousDate}T${options.previousTime}->${ctx.date}T${ctx.time}`,
+  });
+}
+
+/** The clinic could not place a displaced visit inside the rebooking horizon. */
+export async function sendNeedsRebookingNotice(
+  appointmentId: number,
+  options: { previousDate: string; previousTime: string },
+) {
+  const ctx = await contextFor(appointmentId);
+  if (!ctx) return;
+  const content = appointmentNeedsRebooking(ctx, options);
+  await deliver(ctx, content, {
+    kind: "appointment_needs_rebooking",
+    idempotencyKey: `appointment_needs_rebooking:${appointmentId}:${options.previousDate}T${options.previousTime}`,
   });
 }
 

@@ -30,6 +30,12 @@ export const appointmentStatusEnum = pgEnum("appointment_status", [
   "completed",
   "cancelled",
   "no_show",
+  /**
+   * The clinic could not place a displaced visit in any remaining slot within
+   * the rebooking horizon. The row frees its old seat, keeps its payment, and
+   * waits for the patient or clinic to pick a new time.
+   */
+  "needs_rebooking",
 ]);
 export const paymentStatusEnum = pgEnum("payment_status", [
   "pending",
@@ -172,18 +178,34 @@ export const appointments = pgTable(
     appointmentTime: text("appointment_time").notNull(),
     /**
      * Which seat this patient holds, numbered from one. A wave slot has as
-     * many seats as its capacity; a stream window has as many, and the seat
-     * orders the queue through the window.
+     * many seats as its capacity; a stream window has as many. A seat is a
+     * physical place, not a queue rank: a cancelled seat is reused by the next
+     * booking, so FIFO order lives on `queue_since`, not here.
      */
     seatNumber: integer("seat_number").notNull().default(1),
     status: appointmentStatusEnum("status").notNull().default("booked"),
+    /**
+     * When this patient joined the queue for their current slot. FIFO ordering
+     * is by this instant, then appointment id — seat numbers are physical seats,
+     * not queue positions, because a cancelled seat is reused by the next
+     * booking long after the queue formed.
+     */
+    queueSince: timestamp("queue_since", { withTimezone: true }).defaultNow().notNull(),
+    /**
+     * True once the clinic has moved this visit because its published window
+     * changed. It survives a later patient-initiated reschedule so a
+     * cancellation can still be recognised as a clinic-moved booking.
+     */
+    clinicMoved: boolean("clinic_moved").notNull().default(false),
     reason: text("reason"),
     createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
   },
   (table) => [
     /**
      * A doctor cannot have two active bookings in the same seat. Cancelled
-     * appointments are excluded so the seat becomes bookable again.
+     * appointments are excluded so the seat becomes bookable again. A row that
+     * needs rebooking frees its old seat too: it is waiting for a new slot, not
+     * holding the old one.
      */
     uniqueIndex(BOOKED_SEAT_INDEX)
       .on(table.doctorId, table.appointmentDate, table.appointmentTime, table.seatNumber)
@@ -192,6 +214,14 @@ export const appointments = pgTable(
     /** Dashboards filter a doctor's or patient's appointments by date range. */
     index("appointments_doctor_date_idx").on(table.doctorId, table.appointmentDate),
     index("appointments_patient_date_idx").on(table.patientId, table.appointmentDate),
+    /** Live queue order for one slot, oldest booking first. */
+    index("appointments_slot_queue_idx").on(
+      table.doctorId,
+      table.appointmentDate,
+      table.appointmentTime,
+      table.queueSince,
+      table.id,
+    ),
   ],
 );
 
@@ -262,6 +292,81 @@ export type Appointment = typeof appointments.$inferSelect;
 export type AppointmentStatus = Appointment["status"];
 export type Payment = typeof payments.$inferSelect;
 export type PaymentStatus = Payment["status"];
+
+/** Why a displaced visit left its slot. */
+export type ScheduleMoveReason =
+  | "capacity"
+  | "slot_removed"
+  | "window_closed"
+  | "start_moved";
+
+/**
+ * One doctor edit to a published window, kept as an audit trail for every visit
+ * the edit displaced. The block itself may be deleted later; this row keeps the
+ * before/after bounds so the clinic can explain what changed.
+ */
+export const scheduleChanges = pgTable(
+  "schedule_changes",
+  {
+    id: serial("id").primaryKey(),
+    doctorId: integer("doctor_id")
+      .notNull()
+      .references(() => doctors.id, { onDelete: "cascade" }),
+    availabilityId: integer("availability_id").references(() => availability.id, {
+      onDelete: "set null",
+    }),
+    previousStartTime: text("previous_start_time").notNull(),
+    previousEndTime: text("previous_end_time").notNull(),
+    previousCapacity: integer("previous_capacity").notNull(),
+    nextStartTime: text("next_start_time").notNull(),
+    nextEndTime: text("next_end_time").notNull(),
+    nextCapacity: integer("next_capacity").notNull(),
+    createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+  },
+  (table) => [
+    index("schedule_changes_doctor_created_idx").on(table.doctorId, table.createdAt),
+    index("schedule_changes_availability_idx").on(table.availabilityId),
+  ],
+);
+
+export type ScheduleChange = typeof scheduleChanges.$inferSelect;
+
+/**
+ * One appointment the edit had to move. `outcome` says whether the clinic found
+ * a replacement slot (`moved`) or ran out of capacity within the rebooking
+ * horizon (`needs_rebooking`). The from/to columns are a snapshot: they keep
+ * their meaning even after the appointment moves again or is cancelled.
+ */
+export const scheduleChangeMoves = pgTable(
+  "schedule_change_moves",
+  {
+    id: serial("id").primaryKey(),
+    changeId: integer("change_id")
+      .notNull()
+      .references(() => scheduleChanges.id, { onDelete: "cascade" }),
+    appointmentId: integer("appointment_id").references(() => appointments.id, {
+      onDelete: "set null",
+    }),
+    outcome: text("outcome").$type<"moved" | "needs_rebooking">().notNull(),
+    reason: text("reason").$type<ScheduleMoveReason>().notNull(),
+    fromDate: text("from_date").notNull(),
+    fromTime: text("from_time").notNull(),
+    fromSeatNumber: integer("from_seat_number").notNull(),
+    toAvailabilityId: integer("to_availability_id").references(() => availability.id, {
+      onDelete: "set null",
+    }),
+    toDate: text("to_date"),
+    toTime: text("to_time"),
+    toSeatNumber: integer("to_seat_number"),
+    createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+  },
+  (table) => [
+    index("schedule_change_moves_change_idx").on(table.changeId),
+    index("schedule_change_moves_appointment_idx").on(table.appointmentId),
+  ],
+);
+
+export type ScheduleChangeMove = typeof scheduleChangeMoves.$inferSelect;
 
 /**
  * One row per refund attempt. A policy-driven cancellation creates exactly one

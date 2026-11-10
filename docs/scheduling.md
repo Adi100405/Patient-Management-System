@@ -42,11 +42,12 @@ window (say 10:24) would be fiction: the clinic does not promise a patient a
 particular moment inside the run, so no surface — the booking page, the
 dashboard, a receipt, an email or an SMS — ever shows one.
 
-Inside the window, patients are seated in **queue order**: the first booking
-takes seat 1, the next seat 2, and so on. The appointment stores the window's
-start, and the seat number orders the clinic's queue through the window. The
-doctor's dashboard shows the same range plus the patient's place in it
-(`10:00 AM – 12:00 PM · #2 of 5`).
+Inside the window, every patient holds a **seat** (`seat_number`), but a seat is
+a physical place, not a queue rank: a cancelled seat is reused by the next
+booking, long after the queue first formed. Queue order is **FIFO by
+`queue_since`**, with the appointment id as the tie-break — whoever joined the
+slot first is seen first. The doctor's dashboard shows the range plus the real
+place in line (`10:00 AM – 12:00 PM · queue #2 of 5`).
 
 The window's spacing is still derived — `round(window minutes ÷ capacity)`,
 never less than a minute — and stored on the block at publish time, so the
@@ -83,12 +84,14 @@ wave cannot both win: one insert is refused by Postgres, and the loser re-reads
 the taken seats and takes the next free one.
 
 A stream's appointments all carry the **window's start** as their time, so the
-same index and the same tally do the work: seat 1 is the first patient in the
-run, seat 2 the second, and the window is full when its capacity is booked.
+same index and the same tally do the work: each seat is one of the window's
+places, and the window is full when its capacity is booked. Queue order is kept
+separately by `queue_since`; seat number never decides who is seen first.
 
 - **No free seat** → the booking is refused with *"That slot is full."*
 - **Lost the race** → the booking retries up to three times, then says *"That slot was just taken."*
 - **Cancelled booking** → its row leaves the index (the index only holds `booked` rows), so the seat returns to the pool automatically. Nobody has to release it by hand.
+- **Needs rebooking** → a displaced visit with no slot also leaves the index: it is waiting for a new time and must not hold its old seat.
 - **Reschedule** → allocates a seat too, and the appointment's own row is excluded from the tally so it never competes with itself.
 
 Capacity is therefore not a UI hint. The slot disappears from the DOM only
@@ -104,56 +107,87 @@ lives in `blocksConflict` (`lib/schedule.ts`) and runs before the insert.
 A window that ends exactly when the next begins is fine — the overlap is
 half-open.
 
-## Elastic edits — shrinking and expanding a published window
+## Elastic edits — every published window can change
 
 A published block is not frozen. From **Dashboard → Availability**, a doctor
 can **Edit** any block's start, end and capacity — shrinking a window
-(10:00 – 12:00 → 10:00 – 11:00), expanding it (→ 09:00 – 12:00), or changing
-how many patients it holds. A booked window cannot be *removed*, but it can
-always be edited: that is exactly what keeps its bookings standing.
+(10:00 – 12:00 → 10:00 – 11:00), expanding it (→ 09:00 – 12:00), moving its
+start, or **closing** it (`end = start`, which offers no slots). Live bookings
+never veto the change. A booked window still cannot be *removed* while it holds
+upcoming visits; closing it keeps its history and moves the patients safely.
 
-The rule underneath every edit: **a booked visit never moves.** Each visit's
-date, start time and seat live on the appointment row itself, and an edit may
-only change the block in ways that keep every upcoming booking valid where it
-stands:
+The form submits twice. **Preview impact** computes the exact consequence and
+writes nothing. **Confirm and notify patients** recomputes it against fresh data
+and applies it. Only a sibling overlap or a field rule can refuse an edit.
 
-- **Wave** — every booked start time must still be a position of the edited
-  window (a visit that no longer fits before the end would strand its
-  patient), and the capacity may not drop below the busiest booked slot.
-  Shrinking the end past a booked visit is refused, naming the visit;
-  expanding is always safe.
-- **Stream** — every booking anchors to the window's start, so a booked
-  window's start cannot move at all. The end may shrink or expand freely —
-  each patient's seat and queue place ride along — and the capacity may not
-  drop below the busiest booked day.
-- **A block with no upcoming bookings** accepts any edit, subject to the same
-  field rules and the same overlap guard as a fresh block.
+### Who moves, and where
 
-The scheduling style and the visit length are fixed at publish time —
-regridding a wave's slots under booked visits would invent start times the
-clinic never promised.
+Every visited slot is ranked **FIFO**: oldest `queue_since` first, appointment
+id as the stable tie-break. Seat numbers play no part in the ranking.
 
-When a stream's end moves under booked visits, each of those patients receives
-an *appointment window changed* notice (email/SMS per their channel choices)
-carrying the previous and the new range; their start and queue place are
-untouched. Wave visits anchor to their own start, which did not move, so wave
-patients are told nothing.
+- **Already started** — a visit whose slot has begun (clinic time) is locked in
+  place. Moving a patient mid-visit is not a reschedule.
+- **Wave** — positions are recomputed from the edited window. The oldest
+  bookings keep their places while the position still exists; a capacity shrink
+  keeps the oldest and displaces the newest. A position the edit removes — or a
+  closed window — displaces every not-started booking in it.
+- **Stream** — every live booking belongs to the window's start. Moving the
+  start **retimes** each not-started booking to the new start, keeping its seat
+  and its `queue_since`. Shrinking capacity keeps the oldest. Closing the window
+  displaces every not-started booking.
 
-The check lives in `elasticEditConflict` (`lib/schedule.ts`) — pure, like the
-rest of the domain — and the action is `updateAvailability`
-(`actions/availability.ts`).
+A displaced visit is placed in the earliest free seat:
+
+1. remaining capacity on the **same day**, earliest time first;
+2. otherwise the **next seven days** (the original day + 0…7), earliest first;
+3. if neither has room, it becomes **`needs_rebooking`**: the row releases its
+   old seat, keeps its payment, and waits for the patient or clinic to pick a
+   new time.
+
+A clinic move **preserves** the patient's original `queue_since`. A reschedule
+the patient chooses themselves resets it to now, because they joined the new
+slot's queue at that moment.
+
+### What the patient is told and can do
+
+The clinic's assignment is binding, but the patient keeps three real choices:
+keep the new time, reschedule it, or cancel it. Every moved or parked visit is
+notified by email/SMS per the patient's channel choices:
+
+- a **clinic move** names the previous slot, the new slot and why;
+- a **needs-rebooking** notice says no slot was available and asks them to pick
+  a time;
+- a stream whose end alone moved (start and queue untouched) keeps the lighter
+  *appointment window changed* notice.
+
+Cancelling a **clinic-moved** visit is refunded in full, regardless of timing —
+`appointment.clinic_moved` survives even a later patient reschedule so the
+protection cannot be lost. A needs-rebooking row is cancellable and reschedulable
+from the patient dashboard, and a successful reschedule turns it back into
+`booked`.
+
+Every edit also writes an audit trail: one `schedule_changes` row for the
+before/after window, and one `schedule_change_moves` row per changed visit with
+its from/to slot, reason and outcome. The audit records what actually happened,
+not the preview: a patient who cancels mid-apply is left out, and a fallback
+seat taken by a parallel booking turns that move into `needs_rebooking` instead
+of failing the whole edit.
+
+The planner lives in `lib/displacement.ts` — pure, like the rest of the domain —
+and the action is `updateAvailability` (`actions/availability.ts`).
 
 ## Where the code lives
 
 | File | What it holds |
 |---|---|
-| `lib/schedule.ts` | The pure domain: positions, seats, conflicts, offers, window labels |
+| `lib/schedule.ts` | The pure domain: positions, seats, conflicts, offers, window labels, closed windows |
+| `lib/displacement.ts` | The pure displacement planner: FIFO ranks, wave/stream edits, fallback placement, audit-ready outcomes |
 | `lib/availability.ts` | Loads blocks (and their dates) from the database as domain blocks |
-| `lib/seats.ts` | Seat tallies per slot and per date range; upcoming bookings per block |
+| `lib/seats.ts` | Seat tallies per slot and per date range; upcoming bookings per block and per doctor |
 | `lib/slots.ts` | The clinic clock (IST), so "today" is right on a UTC server |
-| `actions/availability.ts` | Publishing, removing and elastically editing blocks, with the overlap and booked-visit guards |
-| `actions/booking.ts` | Booking and rescheduling, with seat allocation and retry |
-| `db/schema.ts` | `scheduling_type`, `capacity`, `availability_dates`, `seat_number`, the seat index |
+| `actions/availability.ts` | Publishing, removing and elastically editing blocks: preview, apply, audit, notifications |
+| `actions/booking.ts` | Booking, rescheduling and cancellation, including clinic-moved refunds and needs-rebooking recovery |
+| `db/schema.ts` | `scheduling_type`, `capacity`, `availability_dates`, `seat_number`, `queue_since`, `clinic_moved`, the seat index and the schedule audit tables |
 
 `lib/schedule.ts` has no database access at all — it is pure functions over
 plain data, which is why the rules can be tested without a database.
@@ -214,17 +248,26 @@ and the Saturday block stops appearing once its date has passed.
 ### Proving an elastic edit
 
 The seed books the demo patient into the doctor's Friday stream (seat 1), so
-the guards have something to guard.
+the displacement path has something to move.
 
 1. Sign in as `doctor@demo.com`, open **Dashboard → Availability**, and press
-   **Edit** on the Friday block. Change its end (16:00–19:00 → 16:00–18:00)
-   and save. The edit lands, the patient's dashboard and the doctor's schedule
-   read the new range, and the patient receives a *visit window changed*
-   notice. Their queue place is unchanged.
-2. Try to move the same block's **start**. The edit is refused — bookings
-   anchor to the start.
-3. Book a Monday wave slot, then try to shrink the Monday block's end past it.
-   The edit is refused, naming the booked time; shrink it to a point that keeps
-   the booking, or expand it, and it saves.
-4. Edit an unbooked block any way you like — with nothing booked, it accepts
-   anything the field rules allow.
+   **Edit** on the Friday block. Change its end (16:00–19:00 → 16:00–18:00),
+   press **Preview impact**, then confirm. The edit lands, the patient's
+   dashboard and the doctor's schedule read the new range, and the patient
+   receives an *appointment window changed* notice. Their queue place is
+   unchanged.
+2. Edit the same block's **start** and confirm. Every not-started booking is
+   retimed to the new start and keeps its queue place; each patient receives a
+   *clinic moved* notice. Their appointments now read the new start–end range.
+3. Book a Monday wave slot, then shrink the Monday block's end past it. The
+   preview names the patient and where they will move; confirming moves them
+   into the next free slot — same day first, then the next seven days. If no
+   slot exists, they become **needs rebooking** on both dashboards.
+4. Set **From** and **To** to the same time to close a window. The preview
+   says the window will close; confirming moves every not-started patient out.
+   A visit that has already started stays exactly where it is.
+5. Cancel a moved appointment from the patient dashboard: the dialog promises
+   a **full refund** even inside two hours, and the cancellation goes through
+   the clinic-cancellation refund path.
+6. Open the availability editor with no bookings: it accepts any edit the field
+   rules allow, exactly as before.

@@ -11,7 +11,7 @@ import { AvailabilityEditForm } from "@/components/availability-edit-form";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { MAX_BLOCK_DATES, type SchedulingType } from "@/lib/schedule";
+import { MAX_BLOCK_DATES, windowIsClosed, type SchedulingType } from "@/lib/schedule";
 import { clinicNow } from "@/lib/slots";
 import { cn, formatDate, formatTime } from "@/lib/utils";
 
@@ -47,7 +47,7 @@ export function AvailabilityManager({
 }: {
   windows: AvailabilityRow[];
   lockedIds: number[];
-  /** Upcoming booked visits per window — the floor an elastic edit respects. */
+  /** Upcoming booked visits per window — shown next to each row, not a limit. */
   bookedCounts?: Record<number, number>;
 }) {
   const [state, formAction, pending] = useActionState<AvailabilityState, FormData>(
@@ -322,9 +322,10 @@ export function AvailabilityManager({
 /**
  * One published block: when it applies, how it is styled and how many it holds.
  *
- * A booked window cannot be removed, but it can still be edited — shrinking or
- * expanding it is exactly what keeps booked visits standing — so the Edit
- * affordance stays available on locked rows.
+ * Bookings never lock the editor. A window with live visits can be shrunk,
+ * moved or closed — the server displaces anyone who no longer fits — so only
+ * removal is held back: deleting the block would erase the window those visits
+ * and its audit trail refer to. Closing it is the elastic alternative.
  */
 function BlockRow({
   window,
@@ -339,19 +340,24 @@ function BlockRow({
   editing: boolean;
   onToggleEdit: () => void;
 }) {
+  const closed = windowIsClosed(window);
+
   return (
     <li className="flex flex-col gap-2 rounded-xl border border-cream-200 p-3">
       <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
         <div className="min-w-0">
           <p className="text-sm font-medium text-ink-900">
-            {window.dayOfWeek !== null
-              ? `${DAYS[window.dayOfWeek]} · ${formatTime(window.startTime)} – ${formatTime(window.endTime)}`
+            {window.dayOfWeek !== null ? `${DAYS[window.dayOfWeek]} · ` : ""}
+            {closed
+              ? "Closed"
               : `${formatTime(window.startTime)} – ${formatTime(window.endTime)}`}
           </p>
           <p className="text-xs text-ink-500">
-            {window.schedulingType === "wave"
-              ? `Wave · ${window.capacity} ${window.capacity === 1 ? "patient" : "patients"} per slot · ${window.slotMinutes} min visit`
-              : `Stream · ${window.capacity} ${window.capacity === 1 ? "patient" : "patients"} in this window`}
+            {closed
+              ? "No slots offered"
+              : window.schedulingType === "wave"
+                ? `Wave · ${window.capacity} ${window.capacity === 1 ? "patient" : "patients"} per slot · ${window.slotMinutes} min visit`
+                : `Stream · ${window.capacity} ${window.capacity === 1 ? "patient" : "patients"} in this window`}
             {booked > 0 ? ` · ${booked} booked` : ""}
           </p>
           {window.dates.length > 0 && (
@@ -373,7 +379,7 @@ function BlockRow({
           </Button>
           {locked ? (
             <span className="text-xs font-medium text-ink-500">
-              Has upcoming bookings — cancel them to remove
+              Has upcoming bookings — edit or close it to move them
             </span>
           ) : (
             <form action={removeAvailability}>

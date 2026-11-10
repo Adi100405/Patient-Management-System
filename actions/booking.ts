@@ -1,6 +1,6 @@
 "use server";
 
-import { and, eq, gt, isNotNull, lt, lte, or } from "drizzle-orm";
+import { and, eq, gt, inArray, isNotNull, lt, lte, or } from "drizzle-orm";
 import { revalidatePath } from "next/cache";
 import { z } from "zod";
 import { getDb } from "@/db";
@@ -20,6 +20,7 @@ import {
   seatFor,
   slotHasStarted,
   visitWhenLabel,
+  windowIsClosed,
   type ScheduleBlock,
 } from "@/lib/schedule";
 import { clinicClock, clinicNow, slotArrived } from "@/lib/slots";
@@ -78,6 +79,10 @@ export async function bookAppointment(
 
   if (!blockAppliesOn(slotWindow, data.date)) {
     return { error: "The doctor does not consult on that day." };
+  }
+
+  if (windowIsClosed(slotWindow)) {
+    return { error: "That availability window is closed." };
   }
 
   // What the patient is booking: a wave's slot at that time, or a stream
@@ -232,14 +237,30 @@ export async function cancelAppointment(formData: FormData) {
       ? appointment.patientId === session.profileId
       : appointment.doctorId === session.profileId;
 
-  if (!ownsIt || appointment.status !== "booked") return;
+  // A visit waiting for a new time is still the patient's to cancel. It holds
+  // no seat, so cancelling it is just closing the rebooking loop.
+  const cancellable =
+    appointment.status === "booked" || appointment.status === "needs_rebooking";
+
+  if (!ownsIt || !cancellable) return;
+
+  // A clinic-moved visit keeps its full-refund protection even if the patient
+  // rescheduled it first: the cancellation is still caused by the clinic's
+  // schedule change, not by the patient changing their mind.
+  const cancelledBy =
+    session.role === "doctor" || appointment.clinicMoved ? "clinic" : "patient";
 
   // The status guard makes the transition atomic: a visit that was completed
   // or already cancelled a moment ago can never be overwritten by this update.
   const cancelled = await db
     .update(appointments)
     .set({ status: "cancelled" })
-    .where(and(eq(appointments.id, id), eq(appointments.status, "booked")))
+    .where(
+      and(
+        eq(appointments.id, id),
+        inArray(appointments.status, ["booked", "needs_rebooking"]),
+      ),
+    )
     .returning({ id: appointments.id });
 
   // Cancelling also ends any checkout still in flight, so an abandoned Razorpay
@@ -258,7 +279,7 @@ export async function cancelAppointment(formData: FormData) {
     try {
       refundOutcome = await refundForCancellation({
         appointmentId: id,
-        cancelledBy: session.role === "doctor" ? "clinic" : "patient",
+        cancelledBy,
       });
     } catch {
       // The refund row records its own failure; nothing to surface here.
@@ -267,8 +288,11 @@ export async function cancelAppointment(formData: FormData) {
     // Told only what is actually true: the policy outcome, never a promise that
     // money is on its way before the gateway has accepted the refund.
     await sendCancellationNotice(id, {
-      cancelledBy: session.role === "doctor" ? "clinic" : "patient",
+      cancelledBy,
       refundLine: refundLineFor(refundOutcome),
+      reasonLine: appointment.clinicMoved
+        ? "This visit was moved by the clinic, so a cancellation is refunded in full."
+        : undefined,
     });
   }
 
@@ -413,10 +437,14 @@ export async function rescheduleAppointment(
   if (appointment.patientId !== session.profileId) {
     return { error: "That appointment does not belong to you." };
   }
-  if (appointment.status !== "booked") {
-    return { error: "Only booked appointments can be rescheduled." };
+  if (appointment.status !== "booked" && appointment.status !== "needs_rebooking") {
+    return { error: "Only live appointments can be rescheduled." };
   }
-  if (appointment.appointmentDate === date && appointment.appointmentTime === time) {
+  if (
+    appointment.status === "booked" &&
+    appointment.appointmentDate === date &&
+    appointment.appointmentTime === time
+  ) {
     return { error: "That is already your current slot." };
   }
   if (slotArrived(date, time)) {
@@ -428,7 +456,7 @@ export async function rescheduleAppointment(
   const blocks = await blocksForDoctor(appointment.doctorId);
   const matches: { block: ScheduleBlock; seats: number }[] = [];
   for (const block of blocks) {
-    if (!blockAppliesOn(block, date)) continue;
+    if (!blockAppliesOn(block, date) || windowIsClosed(block)) continue;
     if (block.schedulingType === "stream") {
       // A stream window books as one item, seated at its start — the same
       // rule a fresh booking follows.
@@ -470,8 +498,17 @@ export async function rescheduleAppointment(
           appointmentTime: time,
           availabilityId: match.block.id,
           seatNumber: seat,
+          // The patient chose this slot, so they join its queue now. A visit
+          // parked as needs_rebooking also becomes live again here.
+          queueSince: new Date(),
+          status: "booked",
         })
-        .where(and(eq(appointments.id, id), eq(appointments.status, "booked")))
+        .where(
+          and(
+            eq(appointments.id, id),
+            inArray(appointments.status, ["booked", "needs_rebooking"]),
+          ),
+        )
         .returning({ id: appointments.id });
 
       if (updated.length === 0) {

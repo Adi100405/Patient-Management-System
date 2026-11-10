@@ -71,11 +71,13 @@ export const availabilitySchema = z
       .max(MAX_CAPACITY, `At most ${MAX_CAPACITY} patients`),
   })
   .superRefine((value, ctx) => {
-    if (value.startTime >= value.endTime) {
+    // Equal bounds are allowed and mean "closed": the block stays published,
+    // keeps its history, and offers no slots. Only a backwards window is bad.
+    if (value.startTime > value.endTime) {
       ctx.addIssue({
         code: "custom",
         path: ["endTime"],
-        message: "End time must be after the start time",
+        message: "End time cannot be before the start time",
       });
     }
     if (value.recurrence === "weekly" && value.dayOfWeek === undefined) {
@@ -87,9 +89,11 @@ export const availabilitySchema = z
     if (value.schedulingType === "wave" && value.slotMinutes === undefined) {
       ctx.addIssue({ code: "custom", path: ["slotMinutes"], message: "Pick a visit length" });
     }
-    if (value.schedulingType === "stream") {
+    if (value.schedulingType === "stream" && value.startTime < value.endTime) {
       // A stream takes one patient per minute of window at the tightest, so a
-      // window shorter than its capacity could never hold them all.
+      // window shorter than its capacity could never hold them all. A closed
+      // window is the exception: it holds nobody, and its stored capacity is
+      // only the shape it would have if reopened.
       const windowMinutes = toMinutes(value.endTime) - toMinutes(value.startTime);
       if (value.capacity > windowMinutes) {
         ctx.addIssue({
@@ -123,14 +127,16 @@ export function availabilityEditSchema(schedulingType: SchedulingType) {
         .max(MAX_CAPACITY, `At most ${MAX_CAPACITY} patients`),
     })
     .superRefine((value, ctx) => {
-      if (value.startTime >= value.endTime) {
+      // Equal bounds close the window. That is a legal edit: every not-started
+      // booking is displaced, and the block keeps its published history.
+      if (value.startTime > value.endTime) {
         ctx.addIssue({
           code: "custom",
           path: ["endTime"],
-          message: "End time must be after the start time",
+          message: "End time cannot be before the start time",
         });
       }
-      if (schedulingType === "stream") {
+      if (schedulingType === "stream" && value.startTime < value.endTime) {
         const windowMinutes = toMinutes(value.endTime) - toMinutes(value.startTime);
         if (value.capacity > windowMinutes) {
           ctx.addIssue({

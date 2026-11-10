@@ -24,6 +24,8 @@ export function describeCancellation(input: {
   date: string;
   time: string;
   cancelledBy?: "patient" | "clinic";
+  /** The clinic displaced this visit, so a cancellation is always full. */
+  clinicMoved?: boolean;
   now?: Date;
 }): CancelPreview {
   if (input.paymentStatus === "refunded") {
@@ -52,11 +54,15 @@ export function describeCancellation(input: {
     };
   }
 
+  // A clinic-moved visit is refunded like a clinic cancellation even when the
+  // patient presses the button: the move, not the patient, caused the change.
+  const cancelledBy = input.clinicMoved ? "clinic" : (input.cancelledBy ?? "patient");
+
   const paidMinor = Math.round(Number(input.amount ?? 0) * 100);
   const decision = evaluateRefundPolicy({
     paidMinor,
     hoursUntilStart: hoursUntilSlot(input.date, input.time, input.now),
-    cancelledBy: input.cancelledBy ?? "patient",
+    cancelledBy,
   });
   const amount = formatCurrency(decision.amountMinor / 100);
 
@@ -65,8 +71,8 @@ export function describeCancellation(input: {
       percentage: 100,
       headline: `Full refund — ${amount}`,
       detail:
-        (input.cancelledBy ?? "patient") === "clinic"
-          ? "Cancelled by the clinic, so the whole fee is returned to the patient's original payment method."
+        cancelledBy === "clinic"
+          ? "Moved by the clinic, so the whole fee is returned to your original payment method."
           : "More than 24 hours before your appointment, so the whole fee is returned to your original payment method.",
     };
   }

@@ -1,7 +1,7 @@
 import Link from "next/link";
 import { and, asc, eq, gte, inArray, lte } from "drizzle-orm";
 import { after } from "next/server";
-import { Bookmark, Calendar, Check, Clock, Receipt, RefreshCw } from "lucide-react";
+import { AlertTriangle, Bookmark, Calendar, Check, Clock, Receipt, RefreshCw } from "lucide-react";
 import { getDb } from "@/db";
 import { appointments, availability, doctors, patients, payments, users, visitNotes } from "@/db/schema";
 import type { AppointmentStatus } from "@/db/schema";
@@ -32,6 +32,7 @@ const statusVariant = {
   cancelled: "cancelled",
   completed: "completed",
   no_show: "no_show",
+  needs_rebooking: "needs_rebooking",
 } as const;
 
 const statusLabel: Record<AppointmentStatus, string> = {
@@ -39,6 +40,7 @@ const statusLabel: Record<AppointmentStatus, string> = {
   cancelled: "Cancelled",
   completed: "Completed",
   no_show: "No-show",
+  needs_rebooking: "Needs rebooking",
 };
 
 /**
@@ -89,6 +91,7 @@ export default async function PatientDashboard() {
       paymentCurrency: payments.currency,
       paymentProvider: payments.provider,
       paymentFailure: payments.failureReason,
+      clinicMoved: appointments.clinicMoved,
       aftercare: visitNotes.aftercare,
     })
     .from(appointments)
@@ -120,7 +123,13 @@ export default async function PatientDashboard() {
 
   const today = clinicNow().date;
   const upcoming = rows.filter((r) => r.status === "booked" && r.date >= today);
-  const history = rows.filter((r) => !upcoming.includes(r)).reverse();
+  // A displaced visit with no slot is not history: the patient still owes the
+  // clinic a decision, so it gets its own action card above the diary.
+  const needsRebooking = rows.filter((r) => r.status === "needs_rebooking");
+  const active = [...upcoming, ...needsRebooking];
+  const history = rows
+    .filter((r) => r.status !== "needs_rebooking" && !upcoming.includes(r))
+    .reverse();
 
   // History reads best as a diary: newest first, one labelled group per month,
   // so a long trail never becomes an undifferentiated wall of cards.
@@ -149,7 +158,7 @@ export default async function PatientDashboard() {
   // own current slot is excluded from the booked set, so a day tab can show it
   // again if it is otherwise free.
   const rescheduleDays = new Map<number, RescheduleDayOption[]>();
-  const doctorIds = [...new Set(upcoming.map((r) => r.doctorId))];
+  const doctorIds = [...new Set(active.map((r) => r.doctorId))];
   const days7 = upcomingDays(7);
   const horizon = upcomingDays(60);
   const horizonEnd = horizon[horizon.length - 1]?.date ?? days7[days7.length - 1]!.date;
@@ -182,7 +191,7 @@ export default async function PatientDashboard() {
     }
 
     const now = clinicNow();
-    for (const row of upcoming) {
+    for (const row of active) {
       const doctorBlocks = blocksByDoctor.get(row.doctorId) ?? [];
       const candidates = new Map<string, DayOption>();
       for (const day of days7) candidates.set(day.date, day);
@@ -200,11 +209,13 @@ export default async function PatientDashboard() {
           [...candidates.values()].sort((a, b) => a.date.localeCompare(b.date)),
         ).map((day) => {
           // The appointment being rescheduled is not its own competitor, so its
-          // own seat is given back before the tally is read.
+          // own seat is given back before the tally is read. A needs-rebooking
+          // row has already released its old seat, so there is nothing to give
+          // back and doing so would invent a free seat at the old time.
           const taken = new Map(
             takenByDoctor.get(`${row.doctorId}|${day.date}`) ?? new Map<string, number>(),
           );
-          if (day.date === row.date) {
+          if (row.status === "booked" && day.date === row.date) {
             const own = taken.get(row.time);
             if (own !== undefined) taken.set(row.time, own - 1);
           }
@@ -276,6 +287,87 @@ export default async function PatientDashboard() {
         </div>
       </Card>
 
+      {needsRebooking.length > 0 && (
+        <Card className="border-rose-200">
+          <CardHeader>
+            <div className="flex items-start gap-3">
+              <span className="grid h-9 w-9 shrink-0 place-items-center rounded-xl bg-rose-100 text-rose-700">
+                <AlertTriangle className="h-4 w-4" aria-hidden="true" />
+              </span>
+              <div>
+                <CardTitle>Choose a new time</CardTitle>
+                <p className="text-sm text-ink-500">
+                  The clinic changed its schedule and could not fit these visits into another slot
+                  within seven days. Pick a new time — or cancel for a full refund.
+                </p>
+              </div>
+            </div>
+          </CardHeader>
+          <CardContent className="space-y-3">
+            {needsRebooking.map((row) => {
+              const days = rescheduleDays.get(row.id) ?? [];
+              const canReschedule = days.some((day) => day.slots.length > 0);
+
+              return (
+                <div
+                  key={row.id}
+                  className="space-y-3 rounded-2xl border border-rose-200 bg-white p-4"
+                >
+                  <div className="flex items-start justify-between gap-3">
+                    <div className="min-w-0 space-y-1">
+                      <p className="font-semibold text-ink-900">
+                        Dr. {row.doctorName}{" "}
+                        <span className="text-sm font-normal text-teal-700">
+                          · {row.specialization}
+                        </span>
+                      </p>
+                      <p className="text-xs text-ink-500">
+                        Previous visit:{" "}
+                        <span className="tabular-nums text-ink-700">
+                          {formatDate(row.date)} · {visitWhen(row)}
+                        </span>
+                      </p>
+                    </div>
+                    <Badge variant="needs_rebooking" className="shrink-0">
+                      Needs rebooking
+                    </Badge>
+                  </div>
+
+                  <p className="rounded-lg bg-rose-50 px-3 py-2 text-xs leading-relaxed text-rose-800">
+                    This visit has no time right now. Your payment is safe — rebooking keeps it,
+                    and cancelling returns it in full because the clinic moved the visit.
+                  </p>
+
+                  <div className="flex flex-wrap items-center justify-end gap-2 border-t border-cream-100 pt-3">
+                    {canReschedule && (
+                      <RescheduleAppointment
+                        appointmentId={row.id}
+                        currentLabel="no time right now"
+                        currentDate=""
+                        currentTime=""
+                        days={days}
+                      />
+                    )}
+                    <CancelAppointment
+                      appointmentId={row.id}
+                      subject={`Dr. ${row.doctorName} · previous ${formatDate(row.date)} · ${visitWhen(row)}`}
+                      preview={describeCancellation({
+                        paymentStatus: row.paymentStatus,
+                        paymentProvider: row.paymentProvider,
+                        amount: row.paymentAmount,
+                        date: row.date,
+                        time: row.time,
+                        clinicMoved: true,
+                      })}
+                    />
+                  </div>
+                </div>
+              );
+            })}
+          </CardContent>
+        </Card>
+      )}
+
       <Card>
         <CardHeader>
           <CardTitle>Upcoming</CardTitle>
@@ -321,6 +413,13 @@ export default async function PatientDashboard() {
                           Reason: <span className="text-ink-700">{row.reason}</span>
                         </p>
                       )}
+                      {row.clinicMoved && (
+                        <p className="flex items-start gap-1.5 rounded-lg bg-amber-50 px-2.5 py-1.5 text-xs leading-relaxed text-amber-800">
+                          <RefreshCw className="mt-0.5 h-3 w-3 shrink-0" aria-hidden="true" />
+                          The clinic moved this visit to a new time. Keep it, reschedule, or cancel
+                          for a full refund.
+                        </p>
+                      )}
                     </div>
                   </div>
                   <Badge variant={statusVariant[row.status]} className="shrink-0">
@@ -353,6 +452,7 @@ export default async function PatientDashboard() {
                       amount: row.paymentAmount,
                       date: row.date,
                       time: row.time,
+                      clinicMoved: row.clinicMoved,
                     })}
                   />
                   {(rescheduleDays.get(row.id) ?? []).some(

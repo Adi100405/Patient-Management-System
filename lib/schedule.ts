@@ -87,6 +87,16 @@ export function streamSpacing(startTime: string, endTime: string, capacity: numb
   return Math.max(1, Math.round(span / Math.max(1, capacity)));
 }
 
+/**
+ * A closed window has no bookable time at all. `end = start` is deliberate:
+ * the doctor may close a published window, and every not-started booking in it
+ * is displaced. An end before the start is invalid, but treating it as closed
+ * keeps stored legacy rows from inventing a backwards window.
+ */
+export function windowIsClosed(rules: ScheduleRules): boolean {
+  return toMinutes(rules.endTime) <= toMinutes(rules.startTime);
+}
+
 /** Every bookable position in a block, in clock order. */
 export function positionsFor(rules: ScheduleRules): readonly Position[] {
   switch (rules.schedulingType) {
@@ -123,6 +133,12 @@ function wavePositions(rules: ScheduleRules): readonly Position[] {
  * Seats are numbered from one, so the first free seat is the one to hand out.
  */
 export function seatFor(takenSeats: readonly number[], seats: number): number | null {
+  // A slot can never seat more patients than it holds, even when the taken
+  // numbers are sparse. A capacity shrink can leave a kept patient in a number
+  // above the new capacity, so counting the live rows is the authority; the
+  // gaps below them are not extra seats.
+  if (takenSeats.length >= seats) return null;
+
   for (let seat = 1; seat <= seats; seat += 1) {
     if (!takenSeats.includes(seat)) return seat;
   }
@@ -146,6 +162,10 @@ export function blockAppliesOn(block: ScheduleBlock, date: string): boolean {
  * for the same seats and the seat numbers would stop meaning anything.
  */
 export function blocksConflict(a: ScheduleBlock, b: ScheduleBlock): boolean {
+  // A closed window (`end = start`) offers nothing, so it cannot compete for a
+  // seat with anything. Keeping it out of the overlap check lets a doctor close
+  // a window without later additions tripping over a block that no longer runs.
+  if (windowIsClosed(a) || windowIsClosed(b)) return false;
   if (!rangesOverlap(a, b)) return false;
   return shareADate(a, b);
 }
@@ -169,59 +189,6 @@ function shareADate(a: ScheduleBlock, b: ScheduleBlock): boolean {
   return a.dates.some((date) => b.dates.includes(date));
 }
 
-/**
- * One booked start time inside a block, and the most patients holding it on
- * any single upcoming date — the floor a capacity edit may not go under.
- */
-export type BookedTime = {
-  readonly time: string;
-  readonly seats: number;
-};
-
-/**
- * Why a doctor's proposed edit to a block's window cannot stand, or null when
- * the edit is safe for every upcoming booking.
- *
- * Wave: every booked start must still be a position of the edited rules, and
- * no position may hold more booked patients than the new capacity — a visit
- * that is booked but no longer offered would strand the patient. Stream: every
- * booking anchors to the window's start, so a booked window's start cannot
- * move, and the window cannot hold fewer patients than its busiest day
- * already does. A block with no upcoming bookings accepts anything.
- */
-export function elasticEditConflict(
-  current: ScheduleRules,
-  candidate: ScheduleRules,
-  booked: readonly BookedTime[],
-): string | null {
-  if (booked.length === 0) return null;
-
-  if (candidate.schedulingType === "stream") {
-    if (candidate.startTime !== current.startTime) {
-      return "Patients are booked in this window — its start cannot move. Reschedule or cancel those visits first.";
-    }
-    const busiest = Math.max(...booked.map((visit) => visit.seats));
-    if (busiest > candidate.capacity) {
-      return `Up to ${busiest} ${busiest === 1 ? "patient is" : "patients are"} booked in this window — capacity cannot go below that.`;
-    }
-    return null;
-  }
-
-  const positions = new Map(
-    positionsFor(candidate).map((position) => [position.time, position.seats]),
-  );
-  for (const visit of booked) {
-    const seats = positions.get(visit.time);
-    if (seats === undefined) {
-      return `${formatTime(visit.time)} is booked — the edited window no longer offers it. Reschedule or cancel that visit first.`;
-    }
-    if (visit.seats > seats) {
-      return `Up to ${visit.seats} ${visit.seats === 1 ? "patient is" : "patients are"} booked at ${formatTime(visit.time)} — capacity cannot go below that.`;
-    }
-  }
-  return null;
-}
-
 /** A date a patient might be offered, with the weekday it falls on. */
 export type DateCandidate = {
   readonly date: string;
@@ -237,7 +204,7 @@ export function openDates<T extends DateCandidate>(
   candidates: readonly T[],
 ): readonly T[] {
   return candidates.filter((candidate) =>
-    blocks.some((block) => blockAppliesOn(block, candidate.date)),
+    blocks.some((block) => !windowIsClosed(block) && blockAppliesOn(block, candidate.date)),
   );
 }
 
@@ -263,6 +230,7 @@ export function offersFor(input: OfferInput): readonly SlotOffer[] {
     if (!blockAppliesOn(block, input.date)) continue;
 
     if (block.schedulingType === "stream") {
+      if (windowIsClosed(block)) continue;
       if (slotHasStarted(input.date, block.startTime, input.now)) continue;
       const taken = input.takenSeats.get(block.startTime) ?? 0;
       offers.push({

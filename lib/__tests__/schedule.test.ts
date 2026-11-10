@@ -2,13 +2,13 @@ import { describe, expect, it } from "vitest";
 import {
   blockAppliesOn,
   blocksConflict,
-  elasticEditConflict,
   offersFor,
   openDates,
   positionsFor,
   seatFor,
   streamSpacing,
   visitWhenLabel,
+  windowIsClosed,
   type ScheduleBlock,
 } from "@/lib/schedule";
 
@@ -100,6 +100,12 @@ describe("seatFor — which seat a new patient takes", () => {
   it("returns nothing when the slot has a single seat and it is taken", () => {
     expect(seatFor([1], 1)).toBeNull();
   });
+
+  it("counts live rows, so a sparse high seat number cannot overbook", () => {
+    // A capacity shrink can keep three patients whose numbers are 2, 4 and 5.
+    // The gap at 1 and 3 must not be read as spare capacity.
+    expect(seatFor([2, 4, 5], 3)).toBeNull();
+  });
 });
 
 describe("blockAppliesOn — which dates a block is open on", () => {
@@ -165,6 +171,13 @@ describe("blocksConflict — two blocks may not cover the same clock time on the
     const b = wave({ dayOfWeek: null, dates: ["2026-11-19"] });
 
     expect(blocksConflict(a, b)).toBe(false);
+  });
+
+  it("ignores a closed window when judging overlap", () => {
+    const closed = wave({ startTime: "10:00", endTime: "10:00" });
+
+    expect(blocksConflict(closed, wave({ startTime: "09:00", endTime: "12:00" }))).toBe(false);
+    expect(blocksConflict(wave({ startTime: "09:00", endTime: "12:00" }), closed)).toBe(false);
   });
 });
 
@@ -394,6 +407,15 @@ describe("openDates — the dates a patient may book", () => {
   it("keeps nothing when there are no blocks", () => {
     expect(openDates([], candidates)).toEqual([]);
   });
+
+  it("hides the dates of a closed window", () => {
+    const open = openDates(
+      [wave({ dayOfWeek: 1, startTime: "10:00", endTime: "10:00" })],
+      candidates,
+    );
+
+    expect(open).toEqual([]);
+  });
 });
 
 describe("visitWhenLabel — how a visit reads in an appointment list", () => {
@@ -412,61 +434,23 @@ describe("visitWhenLabel — how a visit reads in an appointment list", () => {
   });
 });
 
-describe("elasticEditConflict — shrinking or expanding a published window", () => {
-  it("accepts anything when the block has no upcoming bookings", () => {
-    expect(elasticEditConflict(wave(), wave({ startTime: "11:00" }), [])).toBeNull();
-    expect(elasticEditConflict(wave(), wave({ endTime: "10:30" }), [])).toBeNull();
+describe("windowIsClosed — a published window with no slots", () => {
+  it("treats equal bounds as closed", () => {
+    expect(windowIsClosed(wave({ startTime: "10:00", endTime: "10:00" }))).toBe(true);
   });
 
-  it("accepts a wave expansion and a shrink that keeps every booked visit", () => {
-    const booked = [{ time: "10:30", seats: 2 }];
-
-    expect(elasticEditConflict(wave(), wave({ endTime: "13:00" }), booked)).toBeNull();
-    expect(elasticEditConflict(wave(), wave({ startTime: "09:00" }), booked)).toBeNull();
-    expect(elasticEditConflict(wave(), wave({ endTime: "11:00" }), booked)).toBeNull();
+  it("treats a normal window as open", () => {
+    expect(windowIsClosed(wave({ startTime: "10:00", endTime: "10:01" }))).toBe(false);
   });
 
-  it("refuses a wave shrink that would strand a booked visit", () => {
-    expect(
-      elasticEditConflict(wave(), wave({ endTime: "11:00" }), [{ time: "11:30", seats: 1 }]),
-    ).toBe(
-      "11:30 AM is booked — the edited window no longer offers it. Reschedule or cancel that visit first.",
-    );
-    expect(
-      elasticEditConflict(wave(), wave({ startTime: "11:00" }), [{ time: "10:00", seats: 1 }]),
-    ).toBe(
-      "10:00 AM is booked — the edited window no longer offers it. Reschedule or cancel that visit first.",
-    );
-  });
+  it("offers no stream window once it is closed", () => {
+    const offers = offersFor({
+      blocks: [stream({ startTime: "10:00", endTime: "10:00" })],
+      date: "2026-11-02",
+      takenSeats: new Map(),
+      now: { date: "2026-11-01", minutes: 0 },
+    });
 
-  it("refuses a wave capacity below the busiest booked slot", () => {
-    const booked = [
-      { time: "10:00", seats: 2 },
-      { time: "10:30", seats: 1 },
-    ];
-
-    expect(elasticEditConflict(wave(), wave({ capacity: 1 }), booked)).toBe(
-      "Up to 2 patients are booked at 10:00 AM — capacity cannot go below that.",
-    );
-    expect(elasticEditConflict(wave(), wave({ capacity: 2 }), booked)).toBeNull();
-  });
-
-  it("locks a booked stream window's start but lets its end move freely", () => {
-    const booked = [{ time: "10:00", seats: 3 }];
-
-    expect(elasticEditConflict(stream(), stream({ startTime: "10:30" }), booked)).toBe(
-      "Patients are booked in this window — its start cannot move. Reschedule or cancel those visits first.",
-    );
-    expect(elasticEditConflict(stream(), stream({ endTime: "11:00" }), booked)).toBeNull();
-    expect(elasticEditConflict(stream(), stream({ endTime: "13:00" }), booked)).toBeNull();
-  });
-
-  it("refuses a stream capacity below its busiest booked day", () => {
-    const booked = [{ time: "10:00", seats: 3 }];
-
-    expect(elasticEditConflict(stream(), stream({ capacity: 2 }), booked)).toBe(
-      "Up to 3 patients are booked in this window — capacity cannot go below that.",
-    );
-    expect(elasticEditConflict(stream(), stream({ capacity: 3 }), booked)).toBeNull();
+    expect(offers).toEqual([]);
   });
 });
