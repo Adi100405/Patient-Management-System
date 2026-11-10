@@ -7,10 +7,11 @@ appear in their dashboard instantly.
 ## Features
 
 - **Authentication** — email/password signup and signin with role selection (patient / doctor), JWT session in an httpOnly cookie, role-guarded dashboards via middleware
-- **Doctor directory** — search by name or specialization, profile pages with fees, experience and weekly availability
-- **Doctor availability management** — doctors add or remove their own weekly windows from the dashboard; new doctors are seeded with a default Mon–Fri 09:00–13:00 schedule so they are bookable immediately; windows with upcoming bookings cannot be removed
-- **Live slot availability** — slots are generated from each doctor's availability windows (15/30/45/60-minute intervals), booked slots and past times are removed automatically; all comparisons use clinic time (Asia/Kolkata) so "today" is correct regardless of server time zone
-- **Booking flow** — slot selection → optional reason → confirmation; bookings are re-validated server-side and backed by a partial unique index, so the same slot can never be double-booked
+- **Doctor directory** - search by name or specialization, profile pages with fees, experience and availability
+- **Wave and Stream scheduling** - a *wave* holds several patients in one visit slot (10:00-12:00, 30-minute visits, 3 patients per slot); a *stream* spreads patients evenly through a window (16:00-19:00, capacity 5 → 16:00, 16:36, 17:12, 17:48, 18:24). Blocks either repeat every week or open on an explicit list of dates - one date is a single visit day, several are a recurring series. See [`docs/scheduling.md`](docs/scheduling.md)
+- **Doctor availability management** - doctors add or remove their own schedule blocks from the dashboard; overlapping blocks are refused, and windows with upcoming bookings cannot be removed
+- **Live slot availability** - slots are generated from each doctor's blocks, booked slots and past times are removed automatically, and wave slots show how many places are left; all comparisons use clinic time (Asia/Kolkata) so "today" is correct regardless of server time zone
+- **Booking flow** - slot selection → optional reason → confirmation; bookings are re-validated server-side and take a numbered seat, backed by a partial unique index on (doctor, date, time, seat), so a slot can never hold more patients than its capacity allows - and a cancelled booking returns its seat automatically
 - **Patient dashboard** — upcoming appointments, booking history, one-click cancel, notification preferences (email/SMS with consent)
 - **Doctor dashboard** — schedule of booked patients with contact details, daily counts, cancel support
 - **Notifications** — email (Resend) and mobile — SMS via Vonage or Twilio, with an honest trial-account fallback — with a durable audit ledger, idempotent sends, exponential-backoff retries, 24h/1h appointment reminders, and per-patient consent-aware channel preferences. See [`docs/notifications.md`](docs/notifications.md)
@@ -34,7 +35,9 @@ appear in their dashboard instantly.
 
 ## Data model
 
-Five modules — `users`, `patients`, `doctors`, `availability`, `appointments`.
+The scheduling core is `users`, `patients`, `doctors`, `availability`,
+`availability_dates` and `appointments`. Around it sit `payments`, `refunds`,
+`visit_notes`, `reminders`, `care_follow_ups` and the notification ledger.
 See [`docs/ER-Diagram.md`](docs/ER-Diagram.md) for the ER diagram and
 [`docs/er-diagram.dbml`](docs/er-diagram.dbml) for the DBML version.
 

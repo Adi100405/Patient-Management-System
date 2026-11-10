@@ -4,14 +4,24 @@ import { useActionState, useState } from "react";
 import { AlertTriangle, Check } from "lucide-react";
 import { rescheduleAppointment, type RescheduleState } from "@/actions/booking";
 import { Button } from "@/components/ui/button";
+import type { SchedulingType } from "@/lib/schedule";
 import { cn, formatDate, formatTime } from "@/lib/utils";
+
+export type RescheduleSlot = {
+  time: string;
+  /** How many of the slot's seats are still free. */
+  free: number;
+  /** How many patients the slot holds in total. */
+  seats: number;
+  schedulingType: SchedulingType;
+};
 
 export type RescheduleDayOption = {
   date: string;
   label: string;
   isToday: boolean;
   /** Free slots for this doctor on this day, at the moment the page rendered. */
-  times: string[];
+  slots: RescheduleSlot[];
 };
 
 /**
@@ -43,7 +53,10 @@ export function RescheduleAppointment({
   );
   /** Slots this patient can actually move to (their own slot is not one). */
   const selectableTimes = (option: RescheduleDayOption) =>
-    option.times.filter((time) => !(option.date === currentDate && time === currentTime));
+    option.slots.filter((slot) => !(option.date === currentDate && slot.time === currentTime));
+
+  const freeSeats = (option: RescheduleDayOption) =>
+    selectableTimes(option).reduce((sum, slot) => sum + slot.free, 0);
 
   const [dayIndex, setDayIndex] = useState(() =>
     days.findIndex((d) => selectableTimes(d).length > 0),
@@ -112,7 +125,7 @@ export function RescheduleAppointment({
             type="button"
             role="tab"
             aria-selected={index === dayIndex}
-            aria-label={`${option.isToday ? "Today" : option.label} — ${selectableTimes(option).length} free slots`}
+            aria-label={`${option.isToday ? "Today" : option.label} — ${freeSeats(option)} free places`}
             onClick={() => {
               setDayIndex(index);
               setSelected(null);
@@ -122,7 +135,7 @@ export function RescheduleAppointment({
               index === dayIndex
                 ? "border-teal-700 bg-teal-700 text-white shadow-sm"
                 : "border-cream-300 bg-white text-ink-700 hover:border-teal-300 hover:bg-teal-50/50",
-              selectableTimes(option).length === 0 && index !== dayIndex && "text-ink-500/70",
+              freeSeats(option) === 0 && index !== dayIndex && "text-ink-500/70",
             )}
           >
             {option.isToday ? "Today" : option.label}
@@ -132,26 +145,30 @@ export function RescheduleAppointment({
                 index === dayIndex ? "bg-white/20" : "bg-cream-100 text-ink-500",
               )}
             >
-              {selectableTimes(option).length === 0 ? "full" : `${selectableTimes(option).length} free`}
+              {freeSeats(option) === 0 ? "full" : `${freeSeats(option)} free`}
             </span>
           </button>
         ))}
       </div>
 
-      {day && day.times.length > 0 ? (
+      {day && day.slots.length > 0 ? (
         <div className="grid grid-cols-3 gap-2 sm:grid-cols-5">
-          {day.times.map((time) => {
-            const isSelected = selected === time;
-            const isCurrent = isCurrentSlot(day.date, time);
+          {day.slots.map((slot) => {
+            const isSelected = selected === slot.time;
+            const isCurrent = isCurrentSlot(day.date, slot.time);
             return (
               <button
-                key={time}
+                key={slot.time}
                 type="button"
                 aria-pressed={isSelected}
                 disabled={isCurrent}
-                aria-label={isCurrent ? `${formatTime(time)} — your current slot` : formatTime(time)}
+                aria-label={
+                  isCurrent
+                    ? `${formatTime(slot.time)} — your current slot`
+                    : `${formatTime(slot.time)} — ${slot.free} of ${slot.seats} places left`
+                }
                 title={isCurrent ? "Your current slot" : undefined}
-                onClick={() => setSelected(time)}
+                onClick={() => setSelected(slot.time)}
                 className={cn(
                   "flex h-11 items-center justify-center gap-1 rounded-xl border text-xs font-medium transition-colors",
                   isCurrent
@@ -162,7 +179,7 @@ export function RescheduleAppointment({
                 )}
               >
                 {isSelected && <Check className="h-3.5 w-3.5" />}
-                {formatTime(time)}
+                {formatTime(slot.time)}
                 {isCurrent && <span className="text-[9px] uppercase tracking-wide">current</span>}
               </button>
             );
@@ -174,7 +191,7 @@ export function RescheduleAppointment({
         </p>
       )}
 
-      {day && day.times.length > 0 && selectableTimes(day).length === 0 && (
+      {day && day.slots.length > 0 && selectableTimes(day).length === 0 && (
         <p className="rounded-xl border border-cream-200 bg-white p-3.5 text-xs text-ink-500">
           {formatTime(currentTime)} on this day is already yours — pick another day to move.
         </p>
