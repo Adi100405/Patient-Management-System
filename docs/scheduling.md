@@ -188,9 +188,41 @@ and the action is `updateAvailability` (`actions/availability.ts`).
 | `actions/availability.ts` | Publishing, removing and elastically editing blocks: preview, apply, audit, notifications |
 | `actions/booking.ts` | Booking, rescheduling and cancellation, including clinic-moved refunds and needs-rebooking recovery |
 | `db/schema.ts` | `scheduling_type`, `capacity`, `availability_dates`, `seat_number`, `queue_since`, `clinic_moved`, the seat index and the schedule audit tables |
+| `db/migrate.ts` | The additive migration for this schema, plus the ownership repair that keeps the app's role able to write |
 
 `lib/schedule.ts` has no database access at all — it is pure functions over
 plain data, which is why the rules can be tested without a database.
+
+## Applying the schema
+
+`npm run db:migrate` adds this feature's columns, enum value, index and audit
+tables. It is additive and idempotent: it never drops or rewrites anything, so
+it is safe on a database that already carries objects the checked-in schema does
+not describe yet (the preview database holds the forgot-password tables).
+
+Do **not** use `drizzle-kit push` for this. Push diffs the whole schema against
+the database and drops what it cannot explain, which would delete those
+not-yet-merged objects.
+
+### Ownership matters as much as the DDL
+
+A migration connects as whoever holds `DATABASE_URL`, but the deployed app
+connects as its own role — the preview app uses `medrella_preview`, and every
+table in the preview database is owned by it. A table created by a *different*
+role is invisible to the app: reads fail and the first write raises
+`permission denied for table schedule_changes` (SQLSTATE `42501`), which
+surfaces as a 500 on the doctor dashboard.
+
+So whenever the migration runs as a role other than the app's, name the app's
+role too:
+
+```bash
+APP_DB_ROLE=medrella_preview npm run db:migrate
+```
+
+That hands every public table and sequence to that role and then *verifies* the
+role can select, insert and update each one, failing loudly if it cannot. The
+check is the point: it would have caught this outage before a user did.
 
 ## How to test it
 
