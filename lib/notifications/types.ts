@@ -1,12 +1,21 @@
 /**
  * Notifications are modelled as one small message plus a pluggable channel.
- * Email is the first channel; SMS and WhatsApp fit the same contract without
- * touching any caller, which is what the brief asks for ("extensible to
- * SMS/WhatsApp").
+ * Email is the first channel and SMS fits the same contract without touching
+ * any caller — the brief asked for a pipeline that extends to mobile, and SMS
+ * is where mobile lives today.
  */
 
-/** The transport a message travels on. Kept separate from the provider name. */
-export type NotificationChannelName = "email" | "sms" | "whatsapp";
+/**
+ * The transport a message travels on. Kept separate from the provider name.
+ *
+ * WhatsApp was a third channel and has been removed: every WhatsApp send
+ * needs a Meta-approved template, and no account available to this project
+ * could produce one that carried a real appointment date. Mobile messages now
+ * ride SMS. Rows written before the removal still carry `whatsapp` in the
+ * ledger, so the *stored* channel type keeps the value — see
+ * `LedgerChannel` in `store.ts`.
+ */
+export type NotificationChannelName = "email" | "sms";
 
 /** Lifecycle of a ledger row. */
 export type NotificationStatus = "queued" | "sent" | "failed";
@@ -22,13 +31,6 @@ export type NotificationMessage = {
    * plain text. Absent for SMS and for any text-only send.
    */
   html?: string | null;
-  /**
-   * Substitution values for a templated send, keyed by placeholder position:
-   * { "1": "5 Nov 2026", "2": "10:30" }. WhatsApp is template-only — a send on
-   * that network carries these and never a free-form body, and a template
-   * channel must reject a message without them rather than improvise text.
-   */
-  contentVariables?: Record<string, string> | null;
   /** Free-form labels stored alongside the send for debugging and audit. */
   meta?: Record<string, string>;
 };
@@ -40,6 +42,12 @@ export type NotificationMessage = {
  */
 export type NotificationSendResult = {
   providerRef?: string | null;
+  /**
+   * Set when a fallback carried the message instead of the text the clinic
+   * wrote: on a Twilio trial account an SMS goes out as one of Twilio's
+   * predefined templates (`572006`). Null or absent otherwise.
+   */
+  trialTemplate?: string | null;
 };
 
 export type NotificationChannel = {
