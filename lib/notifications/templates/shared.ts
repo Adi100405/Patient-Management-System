@@ -1,4 +1,5 @@
-import { formatDate, formatTime } from "@/lib/utils";
+import { visitWhenLabel, type SchedulingType } from "@/lib/schedule";
+import { formatDate } from "@/lib/utils";
 import type { EmailCta, EmailDetailRow } from "../email-layout";
 import { dashboardUrl, doctorUrl, receiptUrl } from "../links";
 
@@ -21,9 +22,13 @@ export type AppointmentMailContext = {
   doctorId: number;
   doctorName: string;
   specialization: string;
-  /** Clinic wall-clock date and time of the visit. */
+  /** Clinic wall-clock date and time of the visit (a stream's time is its window start). */
   date: string;
   time: string;
+  /** How the visit was published: a wave slot, or a stream window. */
+  schedulingType: SchedulingType;
+  /** A stream window's end; null for a wave slot. */
+  visitEndTime: string | null;
   reason: string | null;
   fee: string;
   currency: string;
@@ -48,9 +53,22 @@ export function greeting(ctx: AppointmentMailContext) {
   return `Hi ${ctx.patientName},`;
 }
 
+/**
+ * The visit's time as the patient reads it: a stream window as one start–end
+ * range, a wave slot as its start. Every sentence that says "at <time>"
+ * builds its <time> from this, so the two styles never drift apart.
+ */
+export function whenSuffix(ctx: AppointmentMailContext) {
+  return visitWhenLabel({
+    schedulingType: ctx.schedulingType,
+    time: ctx.time,
+    windowEnd: ctx.visitEndTime,
+  });
+}
+
 /** The one-line visit summary used inside plain-text bodies. */
 export function visitLine(ctx: AppointmentMailContext) {
-  return `Dr. ${ctx.doctorName} (${ctx.specialization}) · ${formatDate(ctx.date)} at ${formatTime(ctx.time)}`;
+  return `Dr. ${ctx.doctorName} (${ctx.specialization}) · ${formatDate(ctx.date)} at ${whenSuffix(ctx)}`;
 }
 
 /** The visit details as a key/value grid for the HTML layout. */
@@ -61,7 +79,7 @@ export function visitRows(
   return [
     ["Doctor", `Dr. ${ctx.doctorName}`],
     ["Specialty", ctx.specialization],
-    ["When", `${formatDate(ctx.date)} at ${formatTime(ctx.time)}`],
+    ["When", `${formatDate(ctx.date)} at ${whenSuffix(ctx)}`],
     ...extra,
   ];
 }

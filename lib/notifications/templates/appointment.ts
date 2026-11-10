@@ -8,6 +8,7 @@ import {
   signOff,
   visitLine,
   visitRows,
+  whenSuffix,
 } from "./shared";
 import type { AppointmentMailContext, MailContent } from "./shared";
 
@@ -22,8 +23,8 @@ export function bookingConfirmed(
     : `No payment is due now — the consultation fee of ${formatCurrency(ctx.fee)} is payable at the clinic.`;
 
   return {
-    subject: `Appointment booked — ${formatDate(ctx.date)} at ${formatTime(ctx.time)}`,
-    sms: `Medrella: appointment booked — ${formatDate(ctx.date)} at ${formatTime(ctx.time)}, Dr. ${ctx.doctorName}. Details: your Medrella dashboard.`,
+    subject: `Appointment booked — ${formatDate(ctx.date)} at ${whenSuffix(ctx)}`,
+    sms: `Medrella: appointment booked — ${formatDate(ctx.date)} at ${whenSuffix(ctx)}, Dr. ${ctx.doctorName}. Details: your Medrella dashboard.`,
     text: [
       greeting(ctx),
       "Your appointment is booked.",
@@ -46,7 +47,7 @@ export function bookingConfirmed(
 export function paymentConfirmed(ctx: AppointmentMailContext): MailContent {
   return {
     subject: `Payment received — appointment confirmed`,
-    sms: `Medrella: payment of ${formatCurrency(ctx.fee)} received. Your appointment on ${formatDate(ctx.date)} at ${formatTime(ctx.time)} is confirmed.`,
+    sms: `Medrella: payment of ${formatCurrency(ctx.fee)} received. Your appointment on ${formatDate(ctx.date)} at ${whenSuffix(ctx)} is confirmed.`,
     text: [
       greeting(ctx),
       `We have received your consultation fee of ${formatCurrency(ctx.fee)}. Your appointment is confirmed.`,
@@ -116,8 +117,8 @@ export function appointmentRescheduled(
   options: { previousDate: string; previousTime: string },
 ): MailContent {
   return {
-    subject: `Appointment rescheduled — ${formatDate(ctx.date)} at ${formatTime(ctx.time)}`,
-    sms: `Medrella: your appointment is moved to ${formatDate(ctx.date)} at ${formatTime(ctx.time)}, Dr. ${ctx.doctorName}. Previous time: ${formatDate(options.previousDate)} ${formatTime(options.previousTime)}.`,
+    subject: `Appointment rescheduled — ${formatDate(ctx.date)} at ${whenSuffix(ctx)}`,
+    sms: `Medrella: your appointment is moved to ${formatDate(ctx.date)} at ${whenSuffix(ctx)}, Dr. ${ctx.doctorName}. Previous time: ${formatDate(options.previousDate)} ${formatTime(options.previousTime)}.`,
     text: [
       greeting(ctx),
       "Your appointment has been moved to a new time.",
@@ -132,10 +133,10 @@ export function appointmentRescheduled(
       .join("\n") + signOff,
     html: renderEmail({
       heading: "Your appointment has moved",
-      intro: `Your appointment with Dr. ${ctx.doctorName} is now on ${formatDate(ctx.date)} at ${formatTime(ctx.time)}.`,
+      intro: `Your appointment with Dr. ${ctx.doctorName} is now on ${formatDate(ctx.date)} at ${whenSuffix(ctx)}.`,
       rows: [
         ["Doctor", `Dr. ${ctx.doctorName}`],
-        ["New time", `${formatDate(ctx.date)} at ${formatTime(ctx.time)}`],
+        ["New time", `${formatDate(ctx.date)} at ${whenSuffix(ctx)}`],
         ["Previous time", `${formatDate(options.previousDate)} at ${formatTime(options.previousTime)}`],
       ],
       cta: dashboardCta(),
@@ -152,7 +153,7 @@ export function reminder(
 
   return {
     subject: `Reminder — appointment with Dr. ${ctx.doctorName} ${options.kind === "24h" ? "tomorrow" : "in an hour"}`,
-    sms: `Medrella: reminder — appointment with Dr. ${ctx.doctorName} ${when} at ${formatTime(ctx.time)}.`,
+    sms: `Medrella: reminder — appointment with Dr. ${ctx.doctorName} ${when} at ${whenSuffix(ctx)}.`,
     text: [
       greeting(ctx),
       options.kind === "24h"

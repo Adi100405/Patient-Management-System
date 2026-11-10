@@ -44,9 +44,9 @@ const sql = neon(url);
 
 /** The DDL this feature adds, in the order the foreign keys need it. */
 const STATEMENTS: readonly string[] = [
-  // The `needs_rebooking` enum value is added by the PR that ships the doctor
-  // and patient dashboards: those views map every appointment status
-  // exhaustively, so the status and the label that names it belong together.
+  // `needs_rebooking` is an exception state, not history: the visit keeps its
+  // payment and waits for a new time.
+  `alter type appointment_status add value if not exists 'needs_rebooking'`,
 
   // FIFO truth lives here, because seat numbers are physical seats and a
   // cancelled seat is reused by the next booking.

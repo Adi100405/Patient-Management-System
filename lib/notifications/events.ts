@@ -2,9 +2,14 @@ import { notify } from "./index";
 import { appointmentMailContext } from "./context";
 import {
   appointmentCancelled,
+  appointmentClinicMoved,
+  appointmentNeedsRebooking,
   appointmentRescheduled,
+  appointmentWindowChanged,
   bookingConfirmed,
   followUpPrompt,
+  passwordChanged,
+  passwordResetRequest,
   paymentConfirmed,
   refundUpdate,
   reminder,
@@ -14,7 +19,9 @@ import {
 } from "./templates";
 import { channelsFor, preferencesForUser } from "./preferences";
 import type { NotifyResult } from "./index";
+import type { DisplacementReason } from "@/lib/displacement";
 import type { RefundOutcome } from "@/lib/refunds/service";
+import { hashResetToken } from "@/lib/password";
 
 /**
  * Patient-facing notification events. Every function here is safe to call from
@@ -123,6 +130,66 @@ export async function sendRescheduleNotice(
     // Moving the same visit to the same slot twice is the same message; the
     // old slot in the key keeps A→B→A distinct from a repeated A→B.
     idempotencyKey: `appointment_rescheduled:${appointmentId}:${options.previousDate}T${options.previousTime}->${ctx.date}T${ctx.time}`,
+  });
+}
+
+/**
+ * A stream window's end moved under a booked visit. Called after the block row
+ * already carries the new end, so the context reads the new window; the old
+ * end travels in `options`. Only sent when the end actually changed — a start
+ * or capacity edit never moves the patient's visit.
+ */
+export async function sendWindowChangeNotice(
+  appointmentId: number,
+  options: { previousEnd: string },
+) {
+  const ctx = await contextFor(appointmentId);
+  if (!ctx) return;
+  const content = appointmentWindowChanged(ctx, options);
+  await deliver(ctx, content, {
+    kind: "appointment_window_changed",
+    // The old and new ends in the key keep shrinking-then-expanding distinct
+    // from a repeated edit, the same way the reschedule key carries both slots.
+    idempotencyKey: `appointment_window_changed:${appointmentId}:${options.previousEnd}->${ctx.visitEndTime}`,
+  });
+}
+
+/**
+ * The clinic moved a displaced visit into a new published slot. Sent after the
+ * appointment row carries its new date and time; the old slot travels in
+ * `options`. The message names the change as the clinic's, but preserves the
+ * patient's keep / reschedule / cancel choices.
+ */
+export async function sendClinicMoveNotice(
+  appointmentId: number,
+  options: {
+    previousDate: string;
+    previousTime: string;
+    reason: DisplacementReason;
+  },
+) {
+  const ctx = await contextFor(appointmentId);
+  if (!ctx) return;
+  const content = appointmentClinicMoved(ctx, options);
+  await deliver(ctx, content, {
+    kind: "appointment_clinic_moved",
+    // Old and new slots both appear in the key, so an A→B→A sequence is two
+    // real moves rather than one duplicate message.
+    idempotencyKey: `appointment_clinic_moved:${appointmentId}:${options.previousDate}T${options.previousTime}->${ctx.date}T${ctx.time}`,
+  });
+}
+
+/** The clinic could not place a displaced visit inside the rebooking horizon. */
+export async function sendNeedsRebookingNotice(
+  appointmentId: number,
+  options: { previousDate: string; previousTime: string },
+) {
+  const ctx = await contextFor(appointmentId);
+  if (!ctx) return;
+  const content = appointmentNeedsRebooking(ctx, options);
+  await deliver(ctx, content, {
+    kind: "appointment_needs_rebooking",
+    idempotencyKey: `appointment_needs_rebooking:${appointmentId}:${options.previousDate}T${options.previousTime}`,
   });
 }
 
@@ -250,4 +317,57 @@ export async function sendFollowUpPrompt(
     // No idempotency key: the `care_follow_ups` table owns dedup for this event.
   });
   return deliveredTo(ctx, report);
+}
+
+/**
+ * Account-security emails. There is no appointment context to look up and no
+ * channel preference to honour: a reset link must reach the inbox even when
+ * the patient has switched email updates off, and the password-changed
+ * heads-up is the tamper alarm, not a preference. Both ride the same ledger
+ * (kinds `password_reset` / `password_changed`) for audit and are email-only.
+ *
+ * The expiry is every reset email's own truth: RESET_TOKEN_TTL_MINUTES just
+ * passed in, so the message cannot quietly promise a different lifetime than
+ * `lib/password.ts` enforces.
+ */
+export async function sendPasswordResetEmail(
+  to: string,
+  resetUrl: string,
+  options: { expiryMinutes: number },
+): Promise<NotifyResult> {
+  const content = passwordResetRequest({ resetUrl, expiryMinutes: options.expiryMinutes });
+
+  return notify(
+    {
+      to,
+      subject: content.subject,
+      text: content.text,
+      html: content.html,
+      meta: { kind: "password_reset" },
+    },
+    {
+      channel: "email",
+      // Each mint is a distinct credential, so a fresh request mails again;
+      // the digest keeps the raw link out of a second column.
+      idempotencyKey: `password_reset:${hashResetToken(resetUrl)}`,
+    },
+  );
+}
+
+export async function sendPasswordChangedEmail(to: string): Promise<NotifyResult> {
+  const content = passwordChanged();
+
+  return notify(
+    {
+      to,
+      subject: content.subject,
+      text: content.text,
+      html: content.html,
+      meta: { kind: "password_changed" },
+    },
+    // Deliberately no idempotency key: every real password change is its own
+    // event, and the single-use token claim already prevents one change from
+    // mailing twice. The daily sweep retries a failed row on its own.
+    { channel: "email" },
+  );
 }
