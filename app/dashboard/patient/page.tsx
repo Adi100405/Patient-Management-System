@@ -5,6 +5,7 @@ import { AlertTriangle, Bookmark, Calendar, Check, Clock, Receipt, RefreshCw } f
 import { getDb } from "@/db";
 import { appointments, availability, doctors, patients, payments, users, visitNotes } from "@/db/schema";
 import type { AppointmentStatus } from "@/db/schema";
+import { AssistantWidget } from "@/components/assistant/assistant-widget";
 import { CancelAppointment } from "@/components/cancel-appointment";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -608,6 +609,8 @@ export default async function PatientDashboard() {
           }}
         />
       )}
+
+      <AssistantWidget role="patient" name={session.name} />
     </div>
   );
 }

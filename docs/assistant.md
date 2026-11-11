@@ -5,9 +5,9 @@ same appointments, schedules, seats, payments and visit notes the screens read -
 never from mock data - and it can book, reschedule and cancel only through a
 signed confirmation card the person taps.
 
-This document covers the server side: the two routes, the tool surface, the
-proposal token and the privacy rules. The dashboard widget, chat panel, voice
-layer and language picker live in the stacked UI change (`components/assistant/`).
+This document covers the server side and the dashboard panel: the two routes,
+the tool surface, the proposal token, the privacy rules, and the voice/chat
+behaviour of `components/assistant/`.
 
 ## Architecture at a glance
 
@@ -44,6 +44,69 @@ The important line is the last one: the confirm endpoint does not write an
 appointment itself. It reconstructs the `FormData` the booking screen would have
 submitted and calls the existing server action, so every guard the platform
 already has applies to the assistant too.
+
+## The dashboard panel
+
+`components/assistant/assistant-widget.tsx` mounts on both dashboards with the
+signed session's role and name. It stays out of the page until tapped, then
+opens a side panel on desktop and a bottom sheet on a phone; Escape, the close
+button, the backdrop or the launcher all close it. The panel is unmounted on
+close, so no microphone or voice survives the conversation.
+
+Inside the panel:
+
+- **Messages** are plain text, never markdown, because the same string is the
+  spoken reply. User turns sit right; assistant turns sit left.
+- **Confirmation cards** appear after the reply that produced them: action,
+  summary, details (doctor, time, fee or refund line), and Confirm/Decline. A
+  working card shows "checking the slot", a success names what was written, an
+  expired card explains that the five minutes ran out. Declining is local; a
+  declined token is never sent.
+- **Payment cards** appear only when a confirmed booking returned
+  `payment.online: true`. They embed the existing `PaymentCheckout` — the same
+  Razorpay test checkout, failure and retry states as the patient dashboard.
+- **Language picker** offers English, हिंदी and Hinglish, is remembered in
+  `localStorage`, and tells both the model (reply language) and recognition
+  (locale) which one to use.
+- **Spoken replies** are off for typed chat and switch on with the microphone;
+  the speaker button toggles them independently. The reply is read by the
+  device's own `speechSynthesis`, preferring an `en-IN` or `hi-IN` voice.
+
+## Voice behaviour
+
+`components/assistant/use-voice.ts` uses `SpeechRecognition` (or
+`webkitSpeechRecognition`) with `continuous: true` and interim results. A final
+transcript is sent as a chat turn; the microphone keeps listening for the next
+one. When Chrome ends a session on silence, the hook restarts it after 300 ms,
+so a conversation needs one tap, not one tap per sentence.
+
+Two details keep a hands-free conversation usable:
+
+1. **Echo prevention.** The assistant's own voice reaches the microphone. A
+   transcript that closely matches the text last spoken — a contained phrase of
+   at least eight characters, or 70% of its words appearing in the reply — is
+   treated as an echo and dropped. Short answers such as "yes" are never dropped.
+2. **Barge-in.** A transcript that is clearly *not* the reply cancels
+   `speechSynthesis` immediately and is accepted as the next user turn. The
+   person can talk over the assistant instead of waiting for it to finish.
+
+`components/assistant/use-speech.ts` is the other half: one utterance at a time,
+voice chosen per language, and `cancel()` available to the barge-in path. Both
+hooks degrade honestly — the microphone button is disabled with an explanation
+when the browser has no recognition, and a blocked microphone or missing device
+produces a plain message above the composer.
+
+Language mapping:
+
+| Reply language | Recognition | Speech synthesis |
+|---|---|---|
+| English | `en-IN` | `en-IN` |
+| हिंदी | `hi-IN` | `hi-IN` |
+| Hinglish | `en-IN` (Latin-script transcription) | `en-IN` |
+
+The chat state itself (`lib/assistant/chat-state.ts`) is a pure value: entries,
+tracked proposals, ten-turn history and immutable final statuses. That is what
+the tests exercise, without React or a browser.
 
 ## Configuration
 
@@ -181,6 +244,10 @@ The pure layers are unit-tested without a database, browser or model:
   single use.
 - `lib/assistant/__tests__/prompt.test.ts` - role audience, language directive,
   confirm-before-write rule, clinic date.
+- `lib/assistant/__tests__/chat-state.test.ts` - message order, ten-turn
+  history, proposal statuses, single tracking and expiry.
+- `lib/assistant/__tests__/lang.test.ts` - the three languages, their browser
+  locales, and the stored-choice fallback.
 
 The whole project runs `npm test`, `npm run typecheck`, `npm run lint` and
 `npm run build`. The LLM client accepts an injectable `fetchImpl` - the same

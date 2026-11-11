@@ -17,7 +17,7 @@ appear in their dashboard instantly.
 - **Doctor dashboard** — schedule of booked patients with contact details, daily counts, cancel support
 - **Notifications** — email (Resend) and mobile — SMS via Vonage or Twilio, with an honest trial-account fallback — with a durable audit ledger, idempotent sends, exponential-backoff retries, 24h/1h appointment reminders, and per-patient consent-aware channel preferences. See [`docs/notifications.md`](docs/notifications.md)
 - **Post-visit care loop** — completing a visit can carry aftercare instructions (shown only on the patient's dashboard) and a recommended follow-up interval; Medrella thanks the patient after the visit and, when advised, nudges them to rebook. See [`docs/notifications.md`](docs/notifications.md)
-- **Role-aware AI assistant** — a chat assistant on both dashboards answers from real appointments, schedules, slots and payments through role-scoped tools, and performs bookings, reschedules and cancellations only after a signed, single-use confirmation card is tapped. See [`docs/assistant.md`](docs/assistant.md)
+- **Role-aware AI assistant** — a text-or-voice chat assistant on both dashboards (English, हिंदी, Hinglish) answers from real appointments, schedules, slots and payments through role-scoped tools, and performs bookings, reschedules and cancellations only after a signed, single-use confirmation card is tapped. See [`docs/assistant.md`](docs/assistant.md)
 - **Seeded demo data** — 6 doctors across cardiology, dermatology, orthopedics, pediatrics, general medicine and neurology
 
 ## Tech stack
