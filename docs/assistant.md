@@ -50,7 +50,7 @@ already has applies to the assistant too.
 | Variable | Required | Meaning |
 |---|---|---|
 | `GROQ_API_KEY` | yes | Without it `/api/assistant` answers `503` and says the assistant is not configured. Keys: <https://console.groq.com/keys> |
-| `ASSISTANT_MODEL` | no | Defaults to `llama-3.3-70b-versatile`, a function-calling model on Groq |
+| `ASSISTANT_MODEL` | no | Defaults to `qwen/qwen3.8-27b`, a function-calling model on Groq |
 | `ASSISTANT_PROPOSAL_SECRET` | no | Signs proposal tokens. Defaults to `SESSION_SECRET`; set it separately to let session and proposal keys rotate independently |
 
 Environment changes only reach new builds: redeploy after adding a key. A

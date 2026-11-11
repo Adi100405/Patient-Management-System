@@ -11,7 +11,7 @@ import type { ChatMessage, Completion, FetchLike, ToolCall, ToolDefinition } fro
 const GROQ_URL = "https://api.groq.com/openai/v1/chat/completions";
 
 /** The default function-calling model; a deployment may override it. */
-export const DEFAULT_ASSISTANT_MODEL = "llama-3.3-70b-versatile";
+export const DEFAULT_ASSISTANT_MODEL = "qwen/qwen3.8-27b";
 
 export function assistantModel(): string {
   return process.env.ASSISTANT_MODEL?.trim() || DEFAULT_ASSISTANT_MODEL;
