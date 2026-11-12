@@ -1,8 +1,18 @@
 import { NextResponse } from "next/server";
-import { createAssistantClient } from "@/lib/assistant/llm";
-import { buildSystemPrompt } from "@/lib/assistant/prompt";
+import { AssistantModelError, createAssistantClient } from "@/lib/assistant/llm";
+import {
+  classifyFallbackIntent,
+  formatFallbackReply,
+  planFor,
+} from "@/lib/assistant/fallback";
+import {
+  buildSystemPrompt,
+  replyClaimsCard,
+  replyClaimsCompletedWrite,
+} from "@/lib/assistant/prompt";
 import { executeAssistantTool, toolDefinitionsFor } from "@/lib/assistant/tools";
 import type {
+  AssistantContext,
   ChatMessage,
   ClientTurn,
   Proposal,
@@ -18,16 +28,30 @@ import { clinicNow } from "@/lib/slots";
  * the Groq function-calling loop. Tool execution happens server-side under the
  * signed session's identity; the browser only ever receives the final reply and
  * the confirmation cards (never a raw tool result).
+ *
+ * Two rules shape the failure path. A reply may only describe a confirmation
+ * card the server actually minted, and a write may only be described as done
+ * after the person taps Confirm. When the model is unavailable the endpoint
+ * still answers the dashboard-level reads from the database and says plainly
+ * that the assistant was busy.
  */
 export const dynamic = "force-dynamic";
 
 /** Four passes is enough for read → propose → confirm-preparation flows. */
 const MAX_TOOL_ITERATIONS = 4;
-/** Ten turns of context, matching the panel's own cap. */
-const MAX_HISTORY_MESSAGES = 10;
+/**
+ * Six turns of context. The model's free tier counts every prompt token, and a
+ * long transcript is the fastest way to run out of them mid-demo.
+ */
+const MAX_HISTORY_MESSAGES = 6;
+const MAX_HISTORY_CONTENT = 800;
 const MAX_MESSAGE_LENGTH = 1500;
+/** A tool result is data for the model, not the whole database. */
+const MAX_TOOL_RESULT_CHARS = 1800;
 const RATE_LIMIT_MESSAGES = 20;
 const RATE_LIMIT_WINDOW_MS = 60_000;
+/** What the browser should wait before trying the model again. */
+const DEFAULT_RETRY_AFTER_SECONDS = 20;
 
 /**
  * Per-user, per-instance rate limit. Serverless instances each keep their own
@@ -58,7 +82,7 @@ function sanitizeHistory(value: unknown): ClientTurn[] {
     const role = (item as { role?: unknown }).role;
     const content = (item as { content?: unknown }).content;
     if ((role === "user" || role === "assistant") && typeof content === "string" && content.trim()) {
-      turns.push({ role, content: content.trim().slice(0, 1200) });
+      turns.push({ role, content: content.trim().slice(0, MAX_HISTORY_CONTENT) });
     }
   }
   return turns;
@@ -73,6 +97,28 @@ type AssistantRequest = {
   history?: unknown;
   language?: unknown;
 };
+
+/**
+ * The quick answer: the one dashboard-level read a message needs, answered
+ * straight from the database while the model is unavailable. It never writes,
+ * and it returns null when the message needs more than a read.
+ */
+async function quickAnswer(
+  ctx: AssistantContext,
+  message: string,
+  language: ReplyLanguage,
+): Promise<string | null> {
+  const intent = classifyFallbackIntent(ctx.role, message);
+  if (!intent) return null;
+
+  const plan = planFor(intent);
+  const outcome = await executeAssistantTool(
+    plan.tool,
+    JSON.stringify(plan.args),
+    ctx,
+  );
+  return formatFallbackReply(plan, outcome.result, language);
+}
 
 export async function POST(request: Request) {
   const session = await getSession();
@@ -96,8 +142,21 @@ export async function POST(request: Request) {
     );
   }
 
+  const language = parseLanguage(body?.language);
+  const history = sanitizeHistory(body?.history);
+  const ctx: AssistantContext = {
+    userId: session.userId,
+    role: session.role,
+    profileId: session.profileId,
+    name: session.name,
+  };
+
   const client = createAssistantClient();
   if (!client.configured) {
+    const quick = await quickAnswer(ctx, message, language);
+    if (quick) {
+      return NextResponse.json({ reply: quick, proposals: [], busy: true });
+    }
     return NextResponse.json(
       {
         error:
@@ -107,10 +166,7 @@ export async function POST(request: Request) {
     );
   }
 
-  const language = parseLanguage(body?.language);
-  const history = sanitizeHistory(body?.history);
   const tools = toolDefinitionsFor(session.role);
-
   const messages: ChatMessage[] = [
     {
       role: "system",
@@ -147,12 +203,7 @@ export async function POST(request: Request) {
         const outcome = await executeAssistantTool(
           call.function.name,
           call.function.arguments ?? "",
-          {
-            userId: session.userId,
-            role: session.role,
-            profileId: session.profileId,
-            name: session.name,
-          },
+          ctx,
         );
         if (outcome.proposal) proposals.push(outcome.proposal);
         messages.push({
@@ -160,11 +211,36 @@ export async function POST(request: Request) {
           tool_call_id: call.id,
           // Bounded: a long list must not blow the model's context or the
           // ledger row. The UI gets the structured proposal, not this text.
-          content: JSON.stringify(outcome.result).slice(0, 4000),
+          content: JSON.stringify(outcome.result).slice(0, MAX_TOOL_RESULT_CHARS),
         });
       }
     }
   } catch (error) {
+    const busy = error instanceof AssistantModelError && error.status === 429;
+    const retryAfterSeconds = busy
+      ? (error.retryAfterSeconds ?? DEFAULT_RETRY_AFTER_SECONDS)
+      : null;
+
+    const quick = await quickAnswer(ctx, message, language);
+    if (quick) {
+      return NextResponse.json({
+        reply: quick,
+        proposals: [],
+        busy: true,
+        retryAfterSeconds,
+      });
+    }
+
+    if (retryAfterSeconds !== null) {
+      return NextResponse.json(
+        {
+          error: `The assistant is busy right now. Try again in about ${retryAfterSeconds} seconds.`,
+          retryAfterSeconds,
+        },
+        { status: 429, headers: { "Retry-After": String(retryAfterSeconds) } },
+      );
+    }
+
     console.error(
       "[assistant] completion failed:",
       error instanceof Error ? error.message : error,
@@ -173,6 +249,15 @@ export async function POST(request: Request) {
       { error: "The assistant is unavailable right now. Please try again in a moment." },
       { status: 502 },
     );
+  }
+
+  if (replyClaimsCompletedWrite(reply)) {
+    reply = proposals.length
+      ? "I have prepared it, but nothing changes until you tap Confirm on the card."
+      : "Nothing has been changed yet. Please try again, or use the dashboard to make the change.";
+  }
+  if (replyClaimsCard(reply) && proposals.length === 0) {
+    reply = "I could not prepare that confirmation. Please try again in a moment.";
   }
 
   if (!reply) {

@@ -50,7 +50,7 @@ already has applies to the assistant too.
 | Variable | Required | Meaning |
 |---|---|---|
 | `GROQ_API_KEY` | yes | Without it `/api/assistant` answers `503` and says the assistant is not configured. Keys: <https://console.groq.com/keys> |
-| `ASSISTANT_MODEL` | no | Defaults to `qwen/qwen3.8-27b`, a function-calling model on Groq |
+| `ASSISTANT_MODEL` | no | Defaults to `openai/gpt-oss-120b`, a function-calling model on Groq. It calls tools on follow-up turns (where the smaller qwen model used to describe a confirmation card it never created) and its tokenizer sends roughly a third fewer prompt tokens, which matters under Groq's free-tier token budget |
 | `ASSISTANT_PROPOSAL_SECRET` | no | Signs proposal tokens. Defaults to `SESSION_SECRET`; set it separately to let session and proposal keys rotate independently |
 
 Environment changes only reach new builds: redeploy after adding a key. A
@@ -64,18 +64,30 @@ stay off production.
 - **Session first.** No signed session → `401`.
 - **Rate limit.** 20 messages per user per minute, in memory per serverless
   instance. Exceeding it → `429` with a plain retry message.
-- **Message cap.** 1–1500 characters; history is trimmed to the last 10 turns and
-  1200 characters per turn. The browser cannot widen the context it sends.
+- **Message cap.** 1–1500 characters; history is trimmed to the last 6 turns and
+  800 characters per turn. The browser cannot widen the context it sends.
 - **Language.** `en`, `hi` or `hinglish`; the prompt names the reply language so
   the model answers accordingly. Unknown values fall back to English.
 - **Tool loop.** At most 4 model passes per message. A `tool_calls` response is
-  executed server-side; the model sees each result (bounded to 4000 characters)
+  executed server-side; the model sees each result (bounded to 1800 characters)
   and produces the final speakable reply.
-- **Model failures.** A Groq error or timeout (20 s) → `502`; a tool failure is
-  returned to the model as `{ error }` so it can explain rather than crash.
+- **Model failures.** A Groq rate limit (429) → `429` with `retryAfterSeconds`
+  and a `Retry-After` header, so the browser can say when to try again. Any
+  other Groq error or timeout (20 s) → `502`. A tool failure is returned to the
+  model as `{ error }` so it can explain rather than crash.
+- **Quick answers.** When the model is unavailable, the endpoint answers the
+  dashboard-level reads (appointments, payments, prescriptions, doctor search,
+  and the doctor's day, counters, availability, conflicts and next slot) from
+  the database and marks the reply `busy: true`. It never answers a write that
+  way: booking, rescheduling and cancelling still need the model to prepare the
+  proposal.
+- **Card guard.** A reply may only describe a confirmation card the server
+  actually minted, and may only say a write happened after the person taps
+  Confirm. A reply that breaks either rule is replaced with an honest line.
 
-The browser receives only `{ reply, proposals }`. Raw tool results - including
-patient names, phones and visit rows - never leave the server.
+The browser receives only `{ reply, proposals, busy?, retryAfterSeconds? }`. Raw
+tool results - including patient names, phones and visit rows - never leave the
+server.
 
 ## Tool catalog
 
@@ -88,7 +100,7 @@ counter shapes, so the assistant and the screen cannot disagree about a slot.
 | Tool | Answers | Built on |
 |---|---|---|
 | `appointments_for_date` | "who is coming in today", one date's schedule | doctor-dashboard join, FIFO order |
-| `appointment_stats` | booked today, upcoming, patients seen, no-shows | dashboard `count(*) filter` query |
+| `appointment_stats` | booked today, upcoming, patients seen, no-shows, completed, cancelled | dashboard `count(*) filter` query |
 | `availability_overview` | published windows, hours, capacity, closed flags | `blocksForDoctor` |
 | `detect_conflicts` | overlapping windows, using the edit-form rule | `blocksConflict` |
 | `suggest_reschedule_slots` | free alternatives near one booking | `offersFor` + taken seats |
@@ -100,7 +112,7 @@ counter shapes, so the assistant and the screen cannot disagree about a slot.
 | Tool | Answers | Built on |
 |---|---|---|
 | `my_appointments` | upcoming live visits or past/cancelled history | patient-dashboard query, `needs_rebooking` included |
-| `search_doctors` | doctor directory by name or specialization | `ilike` name/specialization search |
+| `search_doctors` | doctor directory by name or specialization | `ilike` name/specialization search; a name typed in another script widens to the name's words and then to the directory, so the model can match the name itself |
 | `available_slots` | what is bookable for a doctor on a date | `offersFor` + `takenSeatsByTime` |
 | `suggest_alternatives` | free slots near a wanted time | same-day then next-week offers |
 | `propose_booking` | a booking confirmation card | `signProposal` |

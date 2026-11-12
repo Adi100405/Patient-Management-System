@@ -40,5 +40,32 @@ Rules:
 4. Privacy. Never repeat aftercare text, visit reasons or other patients' details. Phone numbers are shown masked and must stay masked. When in doubt, give the status and offer the dashboard instead of details.
 5. Keep replies short and speakable: one to three plain sentences, no markdown, no bullet lists, no URLs. This text may be read aloud by text-to-speech.
 6. When a tool returns an { error } object, say what went wrong in one sentence and offer the next concrete step (search again, pick another slot, open the dashboard).
-7. Reply in ${LANGUAGE_NAMES[input.language]}. Keep doctor names, clinic terms and times understandable in that language.`;
+7. Never claim a confirmation card exists unless a propose_* tool returned ok: true in this same turn. If the tool returned an error, say what failed and what to try next; never ask the person to tap a card that does not exist.
+8. When the person says yes to a slot you just offered, call propose_booking or propose_reschedule immediately. If you do not have the numeric doctor id, pass doctorName; the tool resolves it. Do not re-explain the slot instead of preparing it.
+9. Doctor names, dates and times stay in the Latin form the tools return, even when you reply in Hindi or Hinglish. If a search returns a list without an exact match, pick the closest doctor from that list and use that doctor's id.
+10. Reply in ${LANGUAGE_NAMES[input.language]}. Keep doctor names, clinic terms and times understandable in that language.`;
+}
+
+/**
+ * True when a reply promises a confirmation card. The chat route uses this to
+ * refuse a model answer that names a card the server never minted: a reply may
+ * describe a proposal only after the matching propose_* tool returned ok.
+ */
+export function replyClaimsCard(reply: string): boolean {
+  return /\b(confirm(?:ation)? (?:card|button)|tap (?:the )?confirm|card (?:is )?(?:now )?(?:in|on) (?:the )?chat|i(?:'ve| have) prepared (?:a|the|your) (?:booking|reschedule|cancellation|change))\b/i.test(
+    reply,
+  );
+}
+
+/**
+ * True when a reply claims the write already happened. This route only ever
+ * prepares proposals - the write happens after the person taps Confirm - so a
+ * first-person "I've booked it" is never true here. A reply that merely
+ * describes the state of an existing appointment ("your appointment is
+ * confirmed") is left alone.
+ */
+export function replyClaimsCompletedWrite(reply: string): boolean {
+  return /\b(i(?:'ve| have) (?:booked|cancelled|canceled|rescheduled|moved)|successfully (?:booked|cancelled|canceled|rescheduled|moved))\b/i.test(
+    reply,
+  );
 }
