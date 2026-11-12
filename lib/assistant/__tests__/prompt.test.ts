@@ -65,6 +65,19 @@ describe("assistant system prompt", () => {
     expect(prompt).toContain("Never say something is booked");
   });
 
+  it("prepares a requested booking in the same turn and never swaps the slot", () => {
+    const prompt = buildSystemPrompt({
+      role: "patient",
+      name: "Riya Sharma",
+      language: "en",
+      today,
+    });
+
+    expect(prompt).toContain("call the matching propose_* tool in that same turn");
+    expect(prompt).toContain("Never change the date, the time or the doctor");
+    expect(prompt).toContain("call suggest_alternatives");
+  });
+
   it("grounds facts in tool results instead of model memory", () => {
     const prompt = buildSystemPrompt({
       role: "doctor",

@@ -99,6 +99,43 @@ type AssistantRequest = {
 };
 
 /**
+ * The few sentences the server writes without the model. They follow the chosen
+ * reply language so a Hindi or Hinglish turn never falls back to English just
+ * because the model ran out of passes or claimed something it had not done.
+ */
+const STATIC_REPLIES = {
+  preparedNoWrite: {
+    en: "I have prepared that, but nothing changes until you tap Confirm on the card.",
+    hi: "मैंने वह तैयार कर दिया है, लेकिन कार्ड पर Confirm दबाने तक कुछ नहीं बदलेगा।",
+    hinglish: "Maine woh taiyaar kar diya hai, lekin card par Confirm dabane tak kuch nahi badlega.",
+  },
+  nothingChanged: {
+    en: "Nothing has been changed yet. Please try again, or use the dashboard to make the change.",
+    hi: "अभी कुछ नहीं बदला है। कृपया फिर कोशिश करें या बदलाव डैशबोर्ड से करें।",
+    hinglish: "Abhi kuch nahi badla. Dobara try kijiye ya dashboard se badlav kar lijiye.",
+  },
+  couldNotPrepare: {
+    en: "I could not prepare that confirmation. Please try again in a moment.",
+    hi: "मैं वह पुष्टि कार्ड तैयार नहीं कर सका। कृपया थोड़ी देर में फिर कोशिश करें।",
+    hinglish: "Main woh confirmation card taiyaar nahi kar saka. Thodi der baad dobara try kijiye.",
+  },
+  prepared: {
+    en: "I have prepared that. Please check the confirmation card and tap Confirm if it looks right.",
+    hi: "मैंने वह तैयार कर दिया है। कृपया confirmation card देखें और सही लगे तो Confirm दबाएँ।",
+    hinglish: "Maine woh taiyaar kar diya hai. Confirmation card dekh kar sahi lage to Confirm dabaayein.",
+  },
+  couldNotFinish: {
+    en: "I could not finish that request. Could you rephrase it?",
+    hi: "मैं वह अनुरोध पूरा नहीं कर सका। क्या आप दोबारा बता सकते हैं?",
+    hinglish: "Main woh request poora nahi kar saka. Kya aap dobara bata sakte hain?",
+  },
+} as const;
+
+function staticReply(language: ReplyLanguage, key: keyof typeof STATIC_REPLIES): string {
+  return STATIC_REPLIES[key][language];
+}
+
+/**
  * The quick answer: the one dashboard-level read a message needs, answered
  * straight from the database while the model is unavailable. It never writes,
  * and it returns null when the message needs more than a read.
@@ -253,17 +290,17 @@ export async function POST(request: Request) {
 
   if (replyClaimsCompletedWrite(reply)) {
     reply = proposals.length
-      ? "I have prepared it, but nothing changes until you tap Confirm on the card."
-      : "Nothing has been changed yet. Please try again, or use the dashboard to make the change.";
+      ? staticReply(language, "preparedNoWrite")
+      : staticReply(language, "nothingChanged");
   }
   if (replyClaimsCard(reply) && proposals.length === 0) {
-    reply = "I could not prepare that confirmation. Please try again in a moment.";
+    reply = staticReply(language, "couldNotPrepare");
   }
 
   if (!reply) {
     reply = proposals.length
-      ? "I have prepared that. Please check the confirmation card and tap Confirm if it looks right."
-      : "I could not finish that request. Could you rephrase it?";
+      ? staticReply(language, "prepared")
+      : staticReply(language, "couldNotFinish");
   }
 
   return NextResponse.json({ reply, proposals });
