@@ -8,3 +8,5 @@ export * from "./shared";
 export * from "./appointment";
 export * from "./refund";
 export * from "./care";
+export * from "./availability";
+export * from "./password";

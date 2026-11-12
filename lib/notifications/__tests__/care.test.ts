@@ -22,7 +22,8 @@ const ctx: AppointmentMailContext = {
   date: "2026-11-02",
   time: "10:30",
   paymentId: 38,
-  // Deliberately sensitive: if a care template quotes this, the PHI rule is broken.
+  schedulingType: "wave",
+  visitEndTime: null,
   reason: "diabetes follow-up, blood sugar high",
   fee: "600.00",
   currency: "INR",

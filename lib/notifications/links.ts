@@ -32,3 +32,12 @@ export function receiptUrl(paymentId: number): string {
 export function doctorUrl(doctorId: number): string {
   return `${appBaseUrl()}/doctors/${doctorId}`;
 }
+
+/**
+ * The one link that can reset a password. The token rides the query string
+ * once and is single-use, so the URL is the credential — it is built here so
+ * every reset email points at the deployment that sent it.
+ */
+export function resetPasswordUrl(token: string): string {
+  return `${appBaseUrl()}/reset-password?token=${encodeURIComponent(token)}`;
+}
