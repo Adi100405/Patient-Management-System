@@ -144,6 +144,57 @@ async function offersOn(doctorId: number, date: string) {
   });
 }
 
+/**
+ * Open slots for one doctor over the next week.
+ *
+ * `available_slots` uses it when the asked-for day is empty, and the propose_*
+ * tools use it to return alternatives in the same result. That matters: the
+ * model gets four passes, and a reschedule that has to look up the visit, find
+ * the doctor, check the day and then ask for another tool's alternatives runs
+ * out before it can speak.
+ */
+async function nearestOpenSlots(
+  doctorId: number,
+  options: { date?: string; time?: string } = {},
+) {
+  const now = clinicNow();
+  const dates = [
+    ...new Set([
+      ...(options.date ? [options.date] : []),
+      ...upcomingDays(8).map((day) => day.date),
+    ]),
+  ]
+    .filter((date) => date >= now.date)
+    .sort((a, b) => a.localeCompare(b))
+    .slice(0, 9);
+
+  const slots: Array<{
+    date: string;
+    time: string;
+    endTime: string | null;
+    availabilityId: number;
+    free: number;
+  }> = [];
+
+  for (const date of dates) {
+    for (const offer of await offersOn(doctorId, date)) {
+      if (offer.free <= 0) continue;
+      if (options.date === date && options.time !== undefined && offer.time === options.time) {
+        continue;
+      }
+      slots.push({
+        date,
+        time: offer.time,
+        endTime: offer.endTime,
+        availabilityId: offer.availabilityId,
+        free: offer.free,
+      });
+    }
+    if (slots.length >= 6) break;
+  }
+  return slots.slice(0, 6);
+}
+
 function proposalFrom(
   signed: { token: string; id: string; expiresAt: number },
   action: Proposal["action"],
@@ -314,6 +365,7 @@ export const patientHandlers: Record<string, ToolHandler> = {
     const rows = await db
       .select({
         id: appointments.id,
+        doctorId: appointments.doctorId,
         date: appointments.appointmentDate,
         time: appointments.appointmentTime,
         status: appointments.status,
@@ -346,6 +398,7 @@ export const patientHandlers: Record<string, ToolHandler> = {
         count: list.length,
         appointments: list.map((row) => ({
           id: row.id,
+          doctorId: row.doctorId,
           doctorName: row.doctorName,
           specialization: row.specialization,
           date: row.date,
@@ -463,10 +516,15 @@ export const patientHandlers: Record<string, ToolHandler> = {
           schedulingType: offer.schedulingType,
           free: offer.free,
         })),
+        ...(offers.length === 0
+          ? {
+              alternatives: await nearestOpenSlots(doctor.id, { date: parsed.data.date }),
+              note: "No slots on that date. Offer these open times in one short sentence.",
+            }
+          : {}),
       },
     };
   },
-
   suggest_alternatives: async (args) => {
     const parsed = alternativesArg.safeParse(args ?? {});
     if (!parsed.success) return errorResult("I need a valid doctor id.");
@@ -474,50 +532,13 @@ export const patientHandlers: Record<string, ToolHandler> = {
     const doctor = await doctorById(parsed.data.doctorId);
     if (!doctor) return errorResult("That doctor could not be found.");
 
-    const now = clinicNow();
-    const dates = [
-      ...new Set([
-        ...(parsed.data.date ? [parsed.data.date] : []),
-        ...upcomingDays(8).map((day) => day.date),
-      ]),
-    ]
-      .filter((date) => date >= now.date)
-      .sort((a, b) => a.localeCompare(b))
-      .slice(0, 9);
-
-    const slots: Array<{
-      date: string;
-      time: string;
-      endTime: string | null;
-      availabilityId: number;
-      free: number;
-    }> = [];
-
-    for (const date of dates) {
-      for (const offer of await offersOn(doctor.id, date)) {
-        if (offer.free <= 0) continue;
-        if (
-          parsed.data.date === date &&
-          parsed.data.time !== undefined &&
-          offer.time === parsed.data.time
-        ) {
-          continue;
-        }
-        slots.push({
-          date,
-          time: offer.time,
-          endTime: offer.endTime,
-          availabilityId: offer.availabilityId,
-          free: offer.free,
-        });
-      }
-      if (slots.length >= 6) break;
-    }
-
     return {
       result: {
         doctor: { id: doctor.id, name: doctor.fullName },
-        alternatives: slots.slice(0, 6),
+        alternatives: await nearestOpenSlots(doctor.id, {
+          date: parsed.data.date,
+          time: parsed.data.time,
+        }),
       },
     };
   },
@@ -546,9 +567,16 @@ export const patientHandlers: Record<string, ToolHandler> = {
       (offer) => offer.time === parsed.data.time && offer.free > 0,
     );
     if (!match) {
-      return errorResult(
-        "That slot is not free right now. Call suggest_alternatives with the same doctor and I will list what is open.",
-      );
+      return {
+        result: {
+          error: "That slot is not free right now.",
+          alternatives: await nearestOpenSlots(doctor.id, {
+            date: parsed.data.date,
+            time: parsed.data.time,
+          }),
+          note: "Offer these open times in one short sentence; prepare a card only for a time the person accepts.",
+        },
+      };
     }
 
     const signed = await signProposal({
@@ -638,9 +666,16 @@ export const patientHandlers: Record<string, ToolHandler> = {
       (offer) => offer.time === parsed.data.time && offer.free > 0,
     );
     if (!match) {
-      return errorResult(
-        "That new time is not free. Ask me for alternatives and I will list open slots.",
-      );
+      return {
+        result: {
+          error: "That new time is not free.",
+          alternatives: await nearestOpenSlots(appointment.doctorId, {
+            date: parsed.data.date,
+            time: parsed.data.time,
+          }),
+          note: "Offer these open times in one short sentence; prepare a card only for a time the person accepts.",
+        },
+      };
     }
 
     const signed = await signProposal({

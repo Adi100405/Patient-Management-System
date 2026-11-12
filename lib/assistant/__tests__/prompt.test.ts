@@ -75,7 +75,7 @@ describe("assistant system prompt", () => {
 
     expect(prompt).toContain("call the matching propose_* tool in that same turn");
     expect(prompt).toContain("Never change the date, the time or the doctor");
-    expect(prompt).toContain("call suggest_alternatives");
+    expect(prompt).toContain("the tool result carries alternatives");
   });
 
   it("grounds facts in tool results instead of model memory", () => {
