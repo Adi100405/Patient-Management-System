@@ -47,6 +47,23 @@ export function whenLabel(row: {
   })}`;
 }
 
+/**
+ * The patterns a name search should try: the whole typed phrase first, then
+ * its words.
+ *
+ * A name typed in another script ("डॉ. आरव मेहता") cannot match the Latin name
+ * the platform stores, but a word match still finds the right doctor once the
+ * words overlap, and the list fallback covers the rest.
+ */
+export function nameMatchPatterns(term: string): string[] {
+  const trimmed = term.trim();
+  if (!trimmed) return [];
+  const words = trimmed
+    .split(/[^\p{L}\p{N}\p{M}]+/u)
+    .filter((word) => word.length >= 3 && word !== trimmed);
+  return [trimmed, ...words];
+}
+
 /** A tool failure the model can explain; never a thrown 500. */
 export function errorResult(message: string): ToolOutcome {
   return { result: { error: message } };

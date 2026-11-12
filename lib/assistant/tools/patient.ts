@@ -19,6 +19,7 @@ import {
   DATE_PATTERN,
   TIME_PATTERN,
   errorResult,
+  nameMatchPatterns,
   today,
   whenLabel,
   type ToolHandler,
@@ -51,12 +52,19 @@ const alternativesArg = z.object({
   time: z.string().regex(TIME_PATTERN).optional(),
 });
 
-const bookingArg = z.object({
-  doctorId: z.number().int().positive(),
-  date: z.string().regex(DATE_PATTERN),
-  time: z.string().regex(TIME_PATTERN),
-  reason: z.string().trim().max(300).optional(),
-});
+const bookingArg = z
+  .object({
+    doctorId: z.number().int().positive().optional(),
+    // Follow-ups ("yes, book that") carry a name, not the id from two turns
+    // ago. Resolving it here keeps the card reachable in one tool pass.
+    doctorName: z.string().trim().min(2).max(80).optional(),
+    date: z.string().regex(DATE_PATTERN),
+    time: z.string().regex(TIME_PATTERN),
+    reason: z.string().trim().max(300).optional(),
+  })
+  .refine((value) => value.doctorId !== undefined || value.doctorName !== undefined, {
+    message: "doctorId or doctorName is required",
+  });
 
 const rescheduleArg = z.object({
   appointmentId: z.number().int().positive(),
@@ -82,6 +90,37 @@ async function doctorById(doctorId: number) {
     .limit(1);
   return doctor ?? null;
 }
+
+/** Name lookup for a follow-up turn; two matches means "ask for the full name". */
+async function doctorsByName(name: string) {
+  const db = getDb();
+  const trimmed = name.trim();
+  const select = {
+    id: doctors.id,
+    fullName: doctors.fullName,
+    specialization: doctors.specialization,
+    consultationFee: doctors.consultationFee,
+  };
+
+  const exact = await db
+    .select(select)
+    .from(doctors)
+    .where(ilike(doctors.fullName, `%${trimmed}%`))
+    .limit(2);
+  if (exact.length > 0) return exact;
+
+  // A name typed in another script does not match the stored Latin name. The
+  // words might still land on one doctor, so the lookup widens once.
+  const words = nameMatchPatterns(trimmed).slice(1);
+  if (words.length === 0) return [];
+  return db
+    .select(select)
+    .from(doctors)
+    .where(or(...words.map((word) => ilike(doctors.fullName, `%${word}%`))))
+    .limit(2);
+}
+
+type DoctorRow = NonNullable<Awaited<ReturnType<typeof doctorById>>>;
 
 /** Free bookable items for one doctor on one date, computed the dashboard way. */
 async function offersOn(doctorId: number, date: string) {
@@ -184,16 +223,20 @@ export const patientDefinitions: ToolDefinition[] = [
     function: {
       name: "propose_booking",
       description:
-        "Prepare a booking. Does NOT book: returns a confirmation card the patient must tap Confirm on. Verify the slot with available_slots first.",
+        "Prepare a booking. Does NOT book: returns a confirmation card the patient must tap Confirm on. Verify the slot with available_slots first. If you know the doctor's name but not the numeric id (for example a follow-up 'yes'), pass doctorName - the tool resolves it.",
       parameters: {
         type: "object",
         properties: {
-          doctorId: { type: "number" },
+          doctorId: { type: "number", description: "The doctor's id, when known" },
+          doctorName: {
+            type: "string",
+            description: "The doctor's full name, when the id is not known",
+          },
           date: { type: "string", description: "YYYY-MM-DD" },
           time: { type: "string", description: "HH:MM, a time returned by available_slots" },
           reason: { type: "string", description: "Optional visit reason in the patient's words" },
         },
-        required: ["doctorId", "date", "time"],
+        required: ["date", "time"],
         additionalProperties: false,
       },
     },
@@ -310,15 +353,29 @@ export const patientHandlers: Record<string, ToolHandler> = {
     const parsed = searchArg.safeParse(args ?? {});
     const term = parsed.success ? (parsed.data.query?.trim() ?? "") : "";
     const db = getDb();
+    const select = {
+      id: doctors.id,
+      fullName: doctors.fullName,
+      specialization: doctors.specialization,
+      experienceYears: doctors.experienceYears,
+      consultationFee: doctors.consultationFee,
+    };
+    const toDoctor = (row: {
+      id: number;
+      fullName: string;
+      specialization: string;
+      experienceYears: number;
+      consultationFee: string;
+    }) => ({
+      id: row.id,
+      name: row.fullName,
+      specialization: row.specialization,
+      experienceYears: row.experienceYears,
+      fee: row.consultationFee,
+    });
 
     const rows = await db
-      .select({
-        id: doctors.id,
-        fullName: doctors.fullName,
-        specialization: doctors.specialization,
-        experienceYears: doctors.experienceYears,
-        consultationFee: doctors.consultationFee,
-      })
+      .select(select)
       .from(doctors)
       .where(
         term
@@ -330,16 +387,46 @@ export const patientHandlers: Record<string, ToolHandler> = {
       )
       .limit(8);
 
+    if (rows.length === 0 && term) {
+      // The name may have been typed in another script, or the user may have
+      // misremembered it. Rather than reporting "no doctor found", the search
+      // widens to the name's words and then to the whole list, so the model can
+      // match the name itself and carry on.
+      const words = nameMatchPatterns(term).slice(1);
+      const byWord =
+        words.length > 0
+          ? await db
+              .select(select)
+              .from(doctors)
+              .where(
+                or(
+                  ...words.flatMap((word) => [
+                    ilike(doctors.fullName, `%${word}%`),
+                    ilike(doctors.specialization, `%${word}%`),
+                  ]),
+                ),
+              )
+              .limit(8)
+          : [];
+
+      if (byWord.length > 0) {
+        return { result: { query: term, doctors: byWord.map(toDoctor) } };
+      }
+
+      const all = await db.select(select).from(doctors).limit(8);
+      return {
+        result: {
+          query: term,
+          doctors: all.map(toDoctor),
+          note: `No doctor matched "${term}" by name. These are the available doctors; pick the closest one and use its id.`,
+        },
+      };
+    }
+
     return {
       result: {
         query: term,
-        doctors: rows.map((row) => ({
-          id: row.id,
-          name: row.fullName,
-          specialization: row.specialization,
-          experienceYears: row.experienceYears,
-          fee: row.consultationFee,
-        })),
+        doctors: rows.map(toDoctor),
       },
     };
   },
@@ -428,10 +515,20 @@ export const patientHandlers: Record<string, ToolHandler> = {
   propose_booking: async (args, ctx) => {
     const parsed = bookingArg.safeParse(args ?? {});
     if (!parsed.success) {
-      return errorResult("I need a doctor id, a real date and a time (HH:MM) to prepare a booking.");
+      return errorResult("I need a doctor (id or name), a real date and a time (HH:MM) to prepare a booking.");
     }
 
-    const doctor = await doctorById(parsed.data.doctorId);
+    let doctor: DoctorRow | null;
+    if (parsed.data.doctorId !== undefined) {
+      doctor = await doctorById(parsed.data.doctorId);
+    } else {
+      const matches = await doctorsByName(parsed.data.doctorName ?? "");
+      if (matches.length === 0) return errorResult("No doctor matches that name.");
+      if (matches.length > 1) {
+        return errorResult("More than one doctor matches that name. Ask for the full name.");
+      }
+      doctor = matches[0] ?? null;
+    }
     if (!doctor) return errorResult("That doctor could not be found.");
 
     const offers = await offersOn(doctor.id, parsed.data.date);
