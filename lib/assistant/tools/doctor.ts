@@ -102,6 +102,8 @@ async function statsFor(ctx: AssistantContext) {
       upcoming: sql<number>`count(*) filter (where ${appointments.status} = 'booked' and (${appointments.appointmentDate} > ${now.date} or (${appointments.appointmentDate} = ${now.date} and ${appointments.appointmentTime} > ${nowTime})))::int`,
       patientsSeen: sql<number>`count(distinct ${appointments.patientId}) filter (where ${appointments.status} = 'completed')::int`,
       noShows: sql<number>`count(*) filter (where ${appointments.status} = 'no_show')::int`,
+      completed: sql<number>`count(*) filter (where ${appointments.status} = 'completed')::int`,
+      cancelled: sql<number>`count(*) filter (where ${appointments.status} = 'cancelled')::int`,
     })
     .from(appointments)
     .where(eq(appointments.doctorId, ctx.profileId));
@@ -176,7 +178,7 @@ export const doctorDefinitions: ToolDefinition[] = [
     function: {
       name: "appointment_stats",
       description:
-        "The dashboard counters: visits booked today, upcoming live bookings, distinct patients seen, and no-shows, for this doctor only.",
+        "The dashboard counters: visits booked (confirmed) today, upcoming live bookings, distinct patients seen, no-shows, and lifetime completed and cancelled totals, for this doctor only.",
       parameters: { type: "object", properties: {}, additionalProperties: false },
     },
   },
