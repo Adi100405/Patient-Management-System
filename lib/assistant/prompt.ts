@@ -53,7 +53,9 @@ Rules:
  * describe a proposal only after the matching propose_* tool returned ok.
  */
 export function replyClaimsCard(reply: string): boolean {
-  return /\b(confirm(?:ation)? (?:card|button)|tap (?:the )?confirm|card (?:is )?(?:now )?(?:in|on) (?:the )?chat|i(?:'ve| have) prepared (?:a|the|your) (?:booking|reschedule|cancellation|change))\b/i.test(
+  // The apostrophe is curly as often as not: a model that writes "I’ve prepared
+  // a booking" must not slip past the guard that checks for "I've prepared".
+  return /\b(confirm(?:ation)? (?:card|button)|tap (?:the )?confirm|card (?:is )?(?:now )?(?:in|on) (?:the )?chat|i(?:['’]ve| have) prepared (?:a|the|your) (?:booking|reschedule|cancellation|change))\b/i.test(
     reply,
   );
 }
@@ -66,7 +68,7 @@ export function replyClaimsCard(reply: string): boolean {
  * confirmed") is left alone.
  */
 export function replyClaimsCompletedWrite(reply: string): boolean {
-  return /\b(i(?:'ve| have) (?:booked|cancelled|canceled|rescheduled|moved)|successfully (?:booked|cancelled|canceled|rescheduled|moved))\b/i.test(
+  return /\b(i(?:['’]ve| have) (?:booked|cancelled|canceled|rescheduled|moved)|successfully (?:booked|cancelled|canceled|rescheduled|moved))\b/i.test(
     reply,
   );
 }

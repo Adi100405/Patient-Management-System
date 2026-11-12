@@ -17,9 +17,9 @@ import { formatDate, formatTime } from "@/lib/utils";
 import { signProposal } from "@/lib/assistant/propose";
 import {
   DATE_PATTERN,
-  TIME_PATTERN,
   errorResult,
   nameMatchPatterns,
+  toClinicTime,
   today,
   whenLabel,
   type ToolHandler,
@@ -46,10 +46,20 @@ const slotsArg = z.object({
   date: z.string().regex(DATE_PATTERN),
 });
 
+/** "12:30 PM", "12:30pm", "12.30" and "9:05" all become "12:30" / "09:05". */
+const clinicTime = z.string().transform((value, ctx) => {
+  const normalized = toClinicTime(value);
+  if (!normalized) {
+    ctx.addIssue({ code: "custom", message: "Use HH:MM clinic time" });
+    return z.NEVER;
+  }
+  return normalized;
+});
+
 const alternativesArg = z.object({
   doctorId: z.number().int().positive(),
   date: z.string().regex(DATE_PATTERN).optional(),
-  time: z.string().regex(TIME_PATTERN).optional(),
+  time: clinicTime.optional(),
 });
 
 const bookingArg = z
@@ -59,7 +69,7 @@ const bookingArg = z
     // ago. Resolving it here keeps the card reachable in one tool pass.
     doctorName: z.string().trim().min(2).max(80).optional(),
     date: z.string().regex(DATE_PATTERN),
-    time: z.string().regex(TIME_PATTERN),
+    time: clinicTime,
     reason: z.string().trim().max(300).optional(),
   })
   .refine((value) => value.doctorId !== undefined || value.doctorName !== undefined, {
@@ -69,7 +79,7 @@ const bookingArg = z
 const rescheduleArg = z.object({
   appointmentId: z.number().int().positive(),
   date: z.string().regex(DATE_PATTERN),
-  time: z.string().regex(TIME_PATTERN),
+  time: clinicTime,
 });
 
 const appointmentIdArg = z.object({

@@ -64,6 +64,21 @@ export function nameMatchPatterns(term: string): string[] {
   return [trimmed, ...words];
 }
 
+export function toClinicTime(value: string): string | null {
+  const match = value.trim().match(/^(\d{1,2})[:.](\d{2})\s*(am|pm)?$/i);
+  if (!match) return null;
+  let hour = Number(match[1]);
+  const minute = Number(match[2]);
+  const meridiem = match[3]?.toLowerCase();
+  if (meridiem) {
+    if (hour < 1 || hour > 12) return null;
+    if (meridiem === "pm" && hour < 12) hour += 12;
+    if (meridiem === "am" && hour === 12) hour = 0;
+  }
+  if (hour > 23 || minute > 59) return null;
+  return `${String(hour).padStart(2, "0")}:${String(minute).padStart(2, "0")}`;
+}
+
 /** A tool failure the model can explain; never a thrown 500. */
 export function errorResult(message: string): ToolOutcome {
   return { result: { error: message } };

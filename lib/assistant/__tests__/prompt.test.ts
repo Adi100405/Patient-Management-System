@@ -10,7 +10,7 @@ import {
   planFor,
   type FallbackPlan,
 } from "@/lib/assistant/fallback";
-import { nameMatchPatterns } from "@/lib/assistant/tools/shared";
+import { nameMatchPatterns, toClinicTime } from "@/lib/assistant/tools/shared";
 
 const today = "2026-11-11";
 
@@ -132,6 +132,10 @@ describe("assistant reply guards", () => {
     expect(replyClaimsCard("I've prepared a booking for Dr. Aarav Mehta.")).toBe(true);
   });
 
+  it("flags the same sentence with a curly apostrophe", () => {
+    expect(replyClaimsCard("I’ve prepared a booking for Dr. Aarav Mehta.")).toBe(true);
+  });
+
   it("leaves a reply that only reports an existing appointment alone", () => {
     expect(replyClaimsCard("Your appointment with Dr. Aarav Mehta is on Mon, 16 Nov.")).toBe(
       false,
@@ -142,8 +146,27 @@ describe("assistant reply guards", () => {
     expect(replyClaimsCompletedWrite("I've booked your visit for Mon, 16 Nov.")).toBe(true);
   });
 
+  it("flags a completed-write claim with a curly apostrophe", () => {
+    expect(replyClaimsCompletedWrite("I’ve booked your visit for Mon, 16 Nov.")).toBe(true);
+  });
+
   it("leaves a reply that describes appointment state alone", () => {
     expect(replyClaimsCompletedWrite("Your appointment on Mon, 16 Nov is confirmed.")).toBe(false);
+  });
+});
+
+describe("assistant clinic time parsing", () => {
+  it("reads the time format people speak", () => {
+    expect(toClinicTime("12:30 PM")).toBe("12:30");
+    expect(toClinicTime("9:05")).toBe("09:05");
+    expect(toClinicTime("12:05 am")).toBe("00:05");
+    expect(toClinicTime("12.30 pm")).toBe("12:30");
+  });
+
+  it("refuses a time that is not on the clock", () => {
+    expect(toClinicTime("25:00")).toBeNull();
+    expect(toClinicTime("10:7")).toBeNull();
+    expect(toClinicTime("after lunch")).toBeNull();
   });
 });
 
