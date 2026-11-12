@@ -163,7 +163,7 @@ export const doctorDefinitions: ToolDefinition[] = [
     function: {
       name: "appointments_for_date",
       description:
-        "The doctor's own schedule for one date: every visit with its patient, status and queue place. Defaults to today. Use this to answer 'who is coming in', 'what does my day look like'.",
+        "The doctor's schedule for one date: visits with patient, status and queue place. Defaults to today. Use for 'who is coming in'.",
       parameters: {
         type: "object",
         properties: {
@@ -178,7 +178,7 @@ export const doctorDefinitions: ToolDefinition[] = [
     function: {
       name: "appointment_stats",
       description:
-        "The dashboard counters: visits booked (confirmed) today, upcoming live bookings, distinct patients seen, no-shows, and lifetime completed and cancelled totals, for this doctor only.",
+        "This doctor's dashboard counters: confirmed visits today, upcoming live bookings, distinct patients seen, no-shows, lifetime completed and cancelled.",
       parameters: { type: "object", properties: {}, additionalProperties: false },
     },
   },
@@ -187,7 +187,7 @@ export const doctorDefinitions: ToolDefinition[] = [
     function: {
       name: "availability_overview",
       description:
-        "Every schedule window this doctor publishes, with day, hours, capacity and whether it is closed. Use before answering about consulting hours or editing availability.",
+        "Every schedule window this doctor publishes: day, hours, capacity, closed flag. Use for consulting hours.",
       parameters: { type: "object", properties: {}, additionalProperties: false },
     },
   },
@@ -196,7 +196,7 @@ export const doctorDefinitions: ToolDefinition[] = [
     function: {
       name: "detect_conflicts",
       description:
-        "Pairwise overlap check over this doctor's published windows, using the same rule the edit form refuses on. Returns an empty list when the schedule is clean.",
+        "Pairwise overlap check over this doctor's windows, the same rule the edit form refuses on. Empty list means the schedule is clean.",
       parameters: { type: "object", properties: {}, additionalProperties: false },
     },
   },
@@ -205,7 +205,7 @@ export const doctorDefinitions: ToolDefinition[] = [
     function: {
       name: "suggest_reschedule_slots",
       description:
-        "Free slots near one of the doctor's bookings, for offering a displaced patient a new time. Same day first, then the next week.",
+        "Free slots near one of this doctor's bookings, to offer a displaced patient a new time. Same day, then next week.",
       parameters: {
         type: "object",
         properties: {
@@ -220,8 +220,7 @@ export const doctorDefinitions: ToolDefinition[] = [
     type: "function",
     function: {
       name: "next_available_slot",
-      description:
-        "The first free bookable slots over the next week, so the doctor can quote one without scanning the schedule.",
+      description: "First free bookable slots over the next week.",
       parameters: { type: "object", properties: {}, additionalProperties: false },
     },
   },
@@ -229,8 +228,7 @@ export const doctorDefinitions: ToolDefinition[] = [
     type: "function",
     function: {
       name: "today_summary",
-      description:
-        "One call for 'how is today going': the counters plus the full visit list for today.",
+      description: "Today's counters plus the full visit list, in one call.",
       parameters: { type: "object", properties: {}, additionalProperties: false },
     },
   },

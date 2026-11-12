@@ -219,7 +219,7 @@ export const patientDefinitions: ToolDefinition[] = [
     function: {
       name: "my_appointments",
       description:
-        "The patient's own visits: upcoming live bookings (including a visit waiting for a new time), or past and cancelled ones. Use before answering anything about 'my appointments'.",
+        "The patient's own visits: upcoming live bookings (including ones waiting for a new time), or past and cancelled. Use for any 'my appointments' question.",
       parameters: {
         type: "object",
         properties: {
@@ -234,7 +234,7 @@ export const patientDefinitions: ToolDefinition[] = [
     function: {
       name: "search_doctors",
       description:
-        "Search the doctor directory by name or specialization. Returns id, fee, experience and specialization; use the id in every later slot or booking call.",
+        "Search doctors by name or specialization. Returns id, fee, experience, specialization; use the id in later calls.",
       parameters: {
         type: "object",
         properties: {
@@ -249,7 +249,7 @@ export const patientDefinitions: ToolDefinition[] = [
     function: {
       name: "available_slots",
       description:
-        "What is actually bookable for one doctor on one date, with free seats per slot. Always call this before proposing a booking the patient has not already picked from a listing.",
+        "Bookable slots for one doctor on one date, with free seats. Call before proposing a booking the patient did not pick from a listing.",
       parameters: {
         type: "object",
         properties: {
@@ -266,7 +266,7 @@ export const patientDefinitions: ToolDefinition[] = [
     function: {
       name: "suggest_alternatives",
       description:
-        "Free slots near a desired time for the same doctor (same day first, then the next week). Use when the wanted slot is full or does not exist.",
+        "Free slots near a wanted time for the same doctor (same day, then next week). Use when the wanted slot is full or missing.",
       parameters: {
         type: "object",
         properties: {
@@ -284,7 +284,7 @@ export const patientDefinitions: ToolDefinition[] = [
     function: {
       name: "propose_booking",
       description:
-        "Prepare a booking. Does NOT book: returns a confirmation card the patient must tap Confirm on. Verify the slot with available_slots first. If you know the doctor's name but not the numeric id (for example a follow-up 'yes'), pass doctorName - the tool resolves it.",
+        "Prepare a booking; does NOT book - returns a confirmation card the patient taps Confirm on. Verify the slot with available_slots first. Pass doctorName when the id is unknown (e.g. a follow-up 'yes').",
       parameters: {
         type: "object",
         properties: {
@@ -307,7 +307,7 @@ export const patientDefinitions: ToolDefinition[] = [
     function: {
       name: "propose_reschedule",
       description:
-        "Prepare a move of one of the patient's live visits to a new slot. Does NOT move it: returns a confirmation card. Verify the new slot with available_slots first.",
+        "Prepare moving a live visit to a new slot; does NOT move it - returns a confirmation card. Verify the slot with available_slots first.",
       parameters: {
         type: "object",
         properties: {
@@ -325,7 +325,7 @@ export const patientDefinitions: ToolDefinition[] = [
     function: {
       name: "propose_cancel",
       description:
-        "Prepare a cancellation of one of the patient's live visits. Does NOT cancel: returns a confirmation card. The refund policy is applied by the real action.",
+        "Prepare cancelling a live visit; does NOT cancel - returns a confirmation card. The real action applies the refund policy.",
       parameters: {
         type: "object",
         properties: {
@@ -341,7 +341,7 @@ export const patientDefinitions: ToolDefinition[] = [
     function: {
       name: "my_payments_and_refunds",
       description:
-        "The patient's payment rows with their refund status. Use for 'did my refund come', 'what did I pay', 'is payment pending'.",
+        "The patient's payments and refund status. Use for 'did my refund come' or 'is payment pending'.",
       parameters: { type: "object", properties: {}, additionalProperties: false },
     },
   },
@@ -350,7 +350,7 @@ export const patientDefinitions: ToolDefinition[] = [
     function: {
       name: "my_prescriptions",
       description:
-        "Aftercare notes the patient's own doctors left on completed visits. This is the only tool that returns aftercare text; never read it out unless the patient asked about their prescriptions.",
+        "Aftercare notes from the patient's own doctors on completed visits. Only read out when the patient asks about prescriptions.",
       parameters: { type: "object", properties: {}, additionalProperties: false },
     },
   },

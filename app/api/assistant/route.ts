@@ -258,6 +258,19 @@ export async function POST(request: Request) {
       ? (error.retryAfterSeconds ?? DEFAULT_RETRY_AFTER_SECONDS)
       : null;
 
+    // A card minted before the failure is already a real, signed write. Hand it
+    // over with the static "prepared" line instead of dropping it - otherwise
+    // the person has to spend another full turn (and another rate-limit window)
+    // to get back to the same card.
+    if (proposals.length > 0) {
+      return NextResponse.json({
+        reply: staticReply(language, "prepared"),
+        proposals,
+        busy: true,
+        retryAfterSeconds,
+      });
+    }
+
     const quick = await quickAnswer(ctx, message, language);
     if (quick) {
       return NextResponse.json({
