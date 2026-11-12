@@ -4,11 +4,13 @@ import { useActionState, useState } from "react";
 import { AlertTriangle, Check } from "lucide-react";
 import { rescheduleAppointment, type RescheduleState } from "@/actions/booking";
 import { Button } from "@/components/ui/button";
-import type { SchedulingType } from "@/lib/schedule";
+import { visitWhenLabel, type SchedulingType } from "@/lib/schedule";
 import { cn, formatDate, formatTime } from "@/lib/utils";
 
 export type RescheduleSlot = {
   time: string;
+  /** Where the bookable item ends — a stream window's end; null for a wave slot. */
+  endTime: string | null;
   /** How many of the slot's seats are still free. */
   free: number;
   /** How many patients the slot holds in total. */
@@ -76,7 +78,6 @@ export function RescheduleAppointment({
       {open ? "Close" : "Reschedule"}
     </Button>
   );
-
   if (!open) return trigger;
 
   if (state?.message) {
@@ -156,6 +157,50 @@ export function RescheduleAppointment({
           {day.slots.map((slot) => {
             const isSelected = selected === slot.time;
             const isCurrent = isCurrentSlot(day.date, slot.time);
+            const isStream = slot.schedulingType === "stream";
+
+            if (isStream) {
+              // A stream window books as one item, so it owns the full row and
+              // reads as a start–end range — the same presentation as booking.
+              return (
+                <button
+                  key={slot.time}
+                  type="button"
+                  aria-pressed={isSelected}
+                  disabled={isCurrent}
+                  aria-label={
+                    isCurrent
+                      ? `${whenLabel(slot)} — your current window`
+                      : `${whenLabel(slot)} — ${slot.free} of ${slot.seats} places left`
+                  }
+                  title={isCurrent ? "Your current window" : undefined}
+                  onClick={() => setSelected(slot.time)}
+                  className={cn(
+                    "col-span-full flex min-h-11 flex-col items-center justify-center gap-1 rounded-xl border px-3 py-2 text-xs font-medium transition-colors sm:flex-row sm:justify-between sm:gap-4",
+                    isCurrent
+                      ? "cursor-not-allowed border-dashed border-cream-300 bg-cream-100 text-ink-500"
+                      : isSelected
+                        ? "border-teal-700 bg-teal-700 text-white shadow-sm"
+                        : "border-cream-300 bg-white text-ink-800 hover:border-teal-400 hover:bg-teal-50/60",
+                  )}
+                >
+                  <span className="inline-flex items-center gap-1.5 tabular-nums">
+                    {isSelected && <Check className="h-3.5 w-3.5" />}
+                    {whenLabel(slot)}
+                  </span>
+                  {isCurrent ? (
+                    <span className="text-[9px] uppercase tracking-wide">current</span>
+                  ) : (
+                    slotNote(slot) && (
+                      <span className="text-[10px] font-semibold uppercase tracking-wide opacity-75">
+                        {slotNote(slot)}
+                      </span>
+                    )
+                  )}
+                </button>
+              );
+            }
+
             return (
               <button
                 key={slot.time}
@@ -187,7 +232,7 @@ export function RescheduleAppointment({
         </div>
       ) : (
         <p className="rounded-xl border border-cream-200 bg-white p-3.5 text-xs text-ink-500">
-          No free slots on this day. Try another day.
+          No free places on this day. Try another day.
         </p>
       )}
 
@@ -201,7 +246,7 @@ export function RescheduleAppointment({
         <p className="rounded-xl bg-white px-3.5 py-2.5 text-xs text-ink-600 ring-1 ring-inset ring-cream-200">
           Moving from <span className="font-medium text-ink-800">{currentLabel}</span> to{" "}
           <span className="font-medium text-teal-800">
-            {formatDate(day.date)} · {formatTime(selected)}
+            {formatDate(day.date)} · {whenLabel(day.slots.find((slot) => slot.time === selected)!)}
           </span>
         </p>
       )}
@@ -221,9 +266,24 @@ export function RescheduleAppointment({
           {pending ? "Moving your appointment…" : "Confirm new slot"}
         </Button>
       ) : (
-        <p className="text-center text-xs text-ink-500">Pick a free slot above to confirm.</p>
+        <p className="text-center text-xs text-ink-500">Pick a slot or window above to confirm.</p>
       )}
       </form>
     </>
   );
+}
+
+/** What a reschedule tile reads as: a stream's full span, a wave's start time. */
+function whenLabel(slot: RescheduleSlot) {
+  return visitWhenLabel({
+    schedulingType: slot.schedulingType,
+    time: slot.time,
+    windowEnd: slot.endTime,
+  });
+}
+
+/** The note on a stream window tile: what it is and how many places are left. */
+function slotNote(slot: RescheduleSlot) {
+  if (slot.schedulingType !== "stream") return null;
+  return `Stream window · ${slot.free} of ${slot.seats} places left`;
 }

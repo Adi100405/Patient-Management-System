@@ -12,7 +12,7 @@ import { releaseExpiredPayments } from "@/lib/payments/expire";
 import { takenSeatsByTime } from "@/lib/seats";
 import { getSession } from "@/lib/session";
 import { dayOption, clinicNow, upcomingDays, type DayOption } from "@/lib/slots";
-import { offersFor, openDates, type DatedBlock, type WeeklyBlock } from "@/lib/schedule";
+import { offersFor, openDates, windowIsClosed, type DatedBlock, type WeeklyBlock } from "@/lib/schedule";
 import { formatCurrency, formatDate, formatTime } from "@/lib/utils";
 
 export const dynamic = "force-dynamic";
@@ -54,6 +54,10 @@ export default async function DoctorProfilePage({
   const session = await getSession();
 
   const blocks = await blocksForDoctor(doctorId);
+  // A closed window is still published — the doctor keeps it to reopen later —
+  // but it offers no time, so the patient-facing profile must not advertise it
+  // as consulting hours.
+  const openBlocks = blocks.filter((block) => !windowIsClosed(block));
   const now = clinicNow();
   const days = upcomingDays(7);
   const horizon = upcomingDays(DATED_HORIZON_DAYS);
@@ -63,7 +67,7 @@ export default async function DoctorProfilePage({
   // the doctor opened further out.
   const candidates = new Map<string, DayOption>();
   for (const day of days) candidates.set(day.date, day);
-  for (const block of blocks) {
+  for (const block of openBlocks) {
     for (const date of block.dates) {
       if (date < now.date || date > horizonEnd) continue;
       if (!candidates.has(date)) candidates.set(date, dayOption(date));
@@ -71,7 +75,7 @@ export default async function DoctorProfilePage({
   }
 
   const orderedDays = openDates(
-    blocks,
+    openBlocks,
     [...candidates.values()].sort((a, b) => a.date.localeCompare(b.date)),
   );
 
@@ -106,6 +110,7 @@ export default async function DoctorProfilePage({
       .filter((offer) => offer.free > 0)
       .map((offer) => ({
         time: offer.time,
+        endTime: offer.endTime,
         availabilityId: offer.availabilityId,
         schedulingType: offer.schedulingType,
         seats: offer.seats,
@@ -121,10 +126,10 @@ export default async function DoctorProfilePage({
     bookingDays[0]?.date ??
     "";
 
-  const weeklyBlocks = blocks.filter(
+  const weeklyBlocks = openBlocks.filter(
     (block): block is WeeklyBlock => block.dayOfWeek !== null,
   );
-  const datedBlocks = blocks.filter(
+  const datedBlocks = openBlocks.filter(
     (block): block is DatedBlock => block.dayOfWeek === null,
   );
 
@@ -146,10 +151,10 @@ export default async function DoctorProfilePage({
         })),
     }));
 
-  const styles = [...new Set(blocks.map((block) => block.schedulingType))];
+  const styles = [...new Set(openBlocks.map((block) => block.schedulingType))];
 
   const weeklyHours = Math.round(
-    (weeklyBlocks.length ? weeklyBlocks : blocks).reduce(
+    (weeklyBlocks.length ? weeklyBlocks : openBlocks).reduce(
       (total, block) => total + minutesBetween(block.startTime, block.endTime),
       0,
     ) / 60,
@@ -165,7 +170,7 @@ export default async function DoctorProfilePage({
         ? "By date"
         : "Not set";
 
-  const visitLengths = [...new Set(blocks.map((block) => block.slotMinutes))];
+  const visitLengths = [...new Set(openBlocks.map((block) => block.slotMinutes))];
 
   return (
     <div className="space-y-6">
@@ -217,7 +222,7 @@ export default async function DoctorProfilePage({
               ))}
             </dl>
 
-            {blocks.length > 0 && (
+            {openBlocks.length > 0 && (
               <div className="overflow-hidden rounded-2xl border border-cream-200 shadow-sm">
                 <div className="bg-gradient-to-br from-teal-800 to-teal-950 px-4 py-4 text-white">
                   <p className="flex items-center gap-1.5 text-[11px] font-semibold uppercase tracking-wide text-teal-100">
@@ -324,7 +329,8 @@ export default async function DoctorProfilePage({
               </span>
             </div>
             <p className="text-sm text-ink-500">
-              Pick a day, then choose a free slot. A wave slot holds several patients.
+              Pick a day, then choose a free slot. A wave slot holds several patients. A
+              stream window books as one start–end range.
             </p>
           </CardHeader>
           <CardContent className="space-y-5">
