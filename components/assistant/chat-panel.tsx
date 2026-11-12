@@ -12,6 +12,7 @@ import {
   findProposal,
   historyFor,
   isProposalExpired,
+  removeEntry,
   setProposalStatus,
   type ChatState,
 } from "@/lib/assistant/chat-state";
@@ -146,7 +147,8 @@ export function ChatPanel({
     // History is the conversation before this message; the route appends the
     // message itself, exactly like it would for a typed turn.
     const snapshot = stateRef.current;
-    setState((current) => addUserMessage(current, newId("user"), text));
+    const userId = newId("user");
+    setState((current) => addUserMessage(current, userId, text));
 
     try {
       const response = await fetch("/api/assistant", {
@@ -165,7 +167,12 @@ export function ChatPanel({
           typeof data?.error === "string"
             ? data.error
             : "The assistant is unavailable right now. Please try again.";
-        setState((current) => addAssistantMessage(current, newId("assistant"), message));
+        // The turn never happened, so it is rolled back out of the transcript
+        // and the text goes back into the box: a retry is one tap, not a retype.
+        setState((current) =>
+          addAssistantMessage(removeEntry(current, userId), newId("assistant"), message),
+        );
+        setInput(text);
         return;
       }
 
@@ -181,11 +188,12 @@ export function ChatPanel({
     } catch {
       setState((current) =>
         addAssistantMessage(
-          current,
+          removeEntry(current, userId),
           newId("assistant"),
           "I could not reach the assistant. Check your connection and try again.",
         ),
       );
+      setInput(text);
     } finally {
       sendingRef.current = false;
       setSending(false);

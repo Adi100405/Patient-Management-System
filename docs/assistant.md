@@ -68,6 +68,10 @@ Inside the panel:
 - **Language picker** offers English, हिंदी and Hinglish, is remembered in
   `localStorage`, and tells both the model (reply language) and recognition
   (locale) which one to use.
+- **A failed send is rolled back.** The optimistic user turn leaves the
+  transcript, the text returns to the box and the server's own wording (including
+  the rate-limit retry delay) is shown, so a retry is one tap rather than a
+  retyped question.
 - **Spoken replies** are off for typed chat and switch on with the microphone;
   the speaker button toggles them independently. The reply is read by the
   device's own `speechSynthesis`, preferring an `en-IN` or `hi-IN` voice.
@@ -105,7 +109,7 @@ Language mapping:
 | Hinglish | `en-IN` (Latin-script transcription) | `en-IN` |
 
 The chat state itself (`lib/assistant/chat-state.ts`) is a pure value: entries,
-tracked proposals, ten-turn history and immutable final statuses. That is what
+tracked proposals, six-turn history and immutable final statuses. That is what
 the tests exercise, without React or a browser.
 
 ## Configuration

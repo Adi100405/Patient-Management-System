@@ -8,6 +8,7 @@ import {
   findProposal,
   historyFor,
   isProposalExpired,
+  removeEntry,
   setProposalStatus,
   type ChatState,
 } from "@/lib/assistant/chat-state";
@@ -98,7 +99,7 @@ describe("chat state", () => {
     expect(isProposalExpired(findProposal(state, "stale")!.proposal, now)).toBe(true);
   });
 
-  it("sends only the last ten turns, in order, to the server", () => {
+  it("sends only the last six turns, in order, to the server", () => {
     let state = emptyChat();
     for (let index = 0; index < 14; index += 1) {
       state = addUserMessage(state, `u${index}`, `message ${index}`);
@@ -107,7 +108,31 @@ describe("chat state", () => {
     const history = historyFor(state);
 
     expect(history).toHaveLength(MAX_HISTORY);
-    expect(history[0]).toEqual({ role: "user", content: "message 4" });
+    expect(history[0]).toEqual({ role: "user", content: "message 8" });
     expect(history.at(-1)).toEqual({ role: "user", content: "message 13" });
+  });
+});
+
+describe("chat state retry", () => {
+  it("removes a turn that never reached the assistant", () => {
+    const state = addUserMessage(emptyChat(), "u1", "hello");
+
+    expect(removeEntry(state, "u1").entries).toEqual([]);
+  });
+
+  it("leaves the rest of the conversation alone", () => {
+    let state = withProposal();
+    state = addUserMessage(state, "u2", "hello");
+
+    const removed = removeEntry(state, "u2");
+
+    expect(removed.entries.map((entry) => entry.content)).toEqual(["Check this card."]);
+    expect(removed.proposals).toHaveLength(1);
+  });
+
+  it("returns the same state for an unknown turn", () => {
+    const state = emptyChat();
+
+    expect(removeEntry(state, "nope")).toBe(state);
   });
 });

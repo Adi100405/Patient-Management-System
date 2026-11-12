@@ -36,8 +36,8 @@ export type ChatState = {
   readonly proposals: readonly TrackedProposal[];
 };
 
-/** Ten turns is the same cap the server enforces on the history it receives. */
-export const MAX_HISTORY = 10;
+/** Six turns matches the cap the server enforces on the history it receives. */
+export const MAX_HISTORY = 6;
 
 const FINAL_STATUSES: ReadonlySet<ProposalStatus> = new Set([
   "confirmed",
@@ -97,6 +97,16 @@ export function setProposalStatus(
 
 export function findProposal(state: ChatState, proposalId: string): TrackedProposal | null {
   return state.proposals.find((tracked) => tracked.proposal.id === proposalId) ?? null;
+}
+
+/**
+ * Drops one turn. A failed send is rolled back with this: the message never
+ * reached the assistant, so leaving it in the transcript would make the retry
+ * look like a second question.
+ */
+export function removeEntry(state: ChatState, entryId: string): ChatState {
+  const entries = state.entries.filter((entry) => entry.id !== entryId);
+  return entries.length === state.entries.length ? state : { ...state, entries };
 }
 
 export function isProposalExpired(proposal: Proposal, now = Date.now()): boolean {
