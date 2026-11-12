@@ -666,13 +666,17 @@ export const patientHandlers: Record<string, ToolHandler> = {
       (offer) => offer.time === parsed.data.time && offer.free > 0,
     );
     if (!match) {
+      const alternatives = await nearestOpenSlots(appointment.doctorId, {
+        date: parsed.data.date,
+        time: parsed.data.time,
+      });
       return {
         result: {
           error: "That new time is not free.",
-          alternatives: await nearestOpenSlots(appointment.doctorId, {
-            date: parsed.data.date,
-            time: parsed.data.time,
-          }),
+          // The visit's current slot is not an alternative to itself.
+          alternatives: alternatives.filter(
+            (slot) => slot.date !== appointment.date || slot.time !== appointment.time,
+          ),
           note: "Offer these open times in one short sentence; prepare a card only for a time the person accepts.",
         },
       };
