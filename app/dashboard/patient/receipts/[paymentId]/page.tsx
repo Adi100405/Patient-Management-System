@@ -2,12 +2,13 @@ import Link from "next/link";
 import { notFound } from "next/navigation";
 import { and, eq } from "drizzle-orm";
 import { getDb } from "@/db";
-import { appointments, doctors, patients, payments, users } from "@/db/schema";
+import { appointments, availability, doctors, patients, payments, users } from "@/db/schema";
 import { PrintButton } from "@/components/print-button";
 import { refundsForPayment } from "@/lib/refunds/queries";
 import { requireRole } from "@/lib/session";
+import { visitWhenLabel } from "@/lib/schedule";
 import { CLINIC_TIME_ZONE } from "@/lib/slots";
-import { formatCurrency, formatDate, formatTime } from "@/lib/utils";
+import { formatCurrency, formatDate } from "@/lib/utils";
 
 export const dynamic = "force-dynamic";
 export const metadata = { title: "Receipt — Medrella" };
@@ -89,6 +90,8 @@ export default async function ReceiptPage({
       paidAt: payments.paidAt,
       appointmentDate: appointments.appointmentDate,
       appointmentTime: appointments.appointmentTime,
+      schedulingType: availability.schedulingType,
+      windowEnd: availability.endTime,
       doctorName: doctors.fullName,
       specialization: doctors.specialization,
       patientEmail: users.email,
@@ -98,6 +101,7 @@ export default async function ReceiptPage({
     .innerJoin(doctors, eq(doctors.id, payments.doctorId))
     .innerJoin(patients, eq(patients.id, payments.patientId))
     .innerJoin(users, eq(users.id, patients.userId))
+    .leftJoin(availability, eq(appointments.availabilityId, availability.id))
     .where(and(eq(payments.id, id), eq(payments.patientId, session.profileId)))
     .limit(1);
 
@@ -115,6 +119,13 @@ export default async function ReceiptPage({
   const netPaid = Math.max(fee - refunded, 0);
   const receiptNo = `RCPT-${String(row.paymentId).padStart(6, "0")}`;
   const issuedAt = row.paidAt ?? row.createdAt;
+  // A stream visit books the window as one item, so the receipt shows the same
+  // start–end range the patient booked.
+  const visitWhen = visitWhenLabel({
+    schedulingType: row.schedulingType ?? "wave",
+    time: row.appointmentTime,
+    windowEnd: row.windowEnd,
+  });
 
   return (
     <div className="mx-auto max-w-3xl space-y-5">
@@ -181,7 +192,7 @@ export default async function ReceiptPage({
               <p className="mt-2 font-semibold text-ink-900">Dr. {row.doctorName}</p>
               <p className="text-xs text-ink-500">{row.specialization}</p>
               <p className="mt-1 text-xs text-ink-600">
-                {formatDate(row.appointmentDate)} at {formatTime(row.appointmentTime)}
+                {formatDate(row.appointmentDate)} · {visitWhen}
               </p>
             </div>
           </div>
@@ -203,7 +214,7 @@ export default async function ReceiptPage({
                     <p className="text-xs text-ink-500">Dr. {row.doctorName} · {row.specialization}</p>
                   </td>
                   <td className="hidden px-4 py-3 text-ink-600 sm:table-cell">
-                    {formatDate(row.appointmentDate)} at {formatTime(row.appointmentTime)}
+                    {formatDate(row.appointmentDate)} · {visitWhen}
                   </td>
                   <td className="px-4 py-3 text-right font-medium text-ink-900 tabular-nums">
                     {formatCurrency(row.amount)} {row.currency}

@@ -1,6 +1,6 @@
 import { eq, sql } from "drizzle-orm";
 import { getDb } from "@/db";
-import { appointments, doctors, patients, payments, users } from "@/db/schema";
+import { appointments, availability, doctors, patients, payments, users } from "@/db/schema";
 import type { AppointmentMailContext } from "./templates";
 
 /**
@@ -35,11 +35,16 @@ export async function appointmentMailContext(
         order by ${payments.id} desc
         limit 1
       )`,
+      // How the visit was published: a wave slot, or a stream window that the
+      // patient booked as one start–end item.
+      schedulingType: availability.schedulingType,
+      visitEndTime: availability.endTime,
     })
     .from(appointments)
     .innerJoin(patients, eq(patients.id, appointments.patientId))
     .innerJoin(users, eq(users.id, patients.userId))
     .innerJoin(doctors, eq(doctors.id, appointments.doctorId))
+    .leftJoin(availability, eq(availability.id, appointments.availabilityId))
     .where(eq(appointments.id, appointmentId))
     .limit(1);
 
@@ -60,5 +65,7 @@ export async function appointmentMailContext(
     fee: row.fee,
     currency: "INR",
     paymentId: row.paymentId,
+    schedulingType: row.schedulingType ?? "wave",
+    visitEndTime: row.schedulingType === "stream" ? row.visitEndTime : null,
   };
 }

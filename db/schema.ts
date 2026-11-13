@@ -34,12 +34,8 @@ export const appointmentStatusEnum = pgEnum("appointment_status", [
    * The clinic could not place a displaced visit in any remaining slot within
    * the rebooking horizon. The row frees its old seat, keeps its payment, and
    * waits for the patient or clinic to pick a new time.
-   *
-   * The value itself is added in the PR that ships the dashboards, because the
-   * doctor and patient views map every status exhaustively and must learn the
-   * new label in the same change that introduces it.
    */
-  // "needs_rebooking",
+  "needs_rebooking",
 ]);
 export const paymentStatusEnum = pgEnum("payment_status", [
   "pending",

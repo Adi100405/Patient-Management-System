@@ -7,10 +7,11 @@ import {
   removeAvailability,
   type AvailabilityState,
 } from "@/actions/availability";
+import { AvailabilityEditForm } from "@/components/availability-edit-form";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { MAX_BLOCK_DATES, type SchedulingType } from "@/lib/schedule";
+import { MAX_BLOCK_DATES, windowIsClosed, type SchedulingType } from "@/lib/schedule";
 import { clinicNow } from "@/lib/slots";
 import { cn, formatDate, formatTime } from "@/lib/utils";
 
@@ -34,23 +35,29 @@ const selectClass =
 /**
  * The doctor's schedule editor.
  *
- * A block is either a wave (patients share a slot) or a stream (patients are
- * spread through the window), and it either repeats every week or opens on a
- * list of dates. One date is a single visit day; several are a recurring
- * series.
+ * A block is either a wave (patients share a slot) or a stream (the whole
+ * window books as one start–end item), and it either repeats every week or
+ * opens on a list of dates. One date is a single visit day; several are a
+ * recurring series.
  */
 export function AvailabilityManager({
   windows,
   lockedIds,
+  bookedCounts = {},
 }: {
   windows: AvailabilityRow[];
   lockedIds: number[];
+  /** Upcoming booked visits per window — shown next to each row, not a limit. */
+  bookedCounts?: Record<number, number>;
 }) {
   const [state, formAction, pending] = useActionState<AvailabilityState, FormData>(
     addAvailability,
     null,
   );
   const locked = new Set(lockedIds);
+
+  // One edit open at a time: the open form belongs to its row.
+  const [editingId, setEditingId] = useState<number | null>(null);
 
   const [type, setType] = useState<SchedulingType>("wave");
   const [recurrence, setRecurrence] = useState<"weekly" | "dates">("weekly");
@@ -90,6 +97,11 @@ export function AvailabilityManager({
                   key={window.id}
                   window={window}
                   locked={locked.has(window.id)}
+                  booked={bookedCounts[window.id] ?? 0}
+                  editing={editingId === window.id}
+                  onToggleEdit={() =>
+                    setEditingId(editingId === window.id ? null : window.id)
+                  }
                 />
               ))}
             </ul>
@@ -106,6 +118,11 @@ export function AvailabilityManager({
                     key={window.id}
                     window={window}
                     locked={locked.has(window.id)}
+                    booked={bookedCounts[window.id] ?? 0}
+                    editing={editingId === window.id}
+                    onToggleEdit={() =>
+                      setEditingId(editingId === window.id ? null : window.id)
+                    }
                   />
                 ))}
               </ul>
@@ -152,7 +169,7 @@ export function AvailabilityManager({
           <p className="text-xs text-ink-500">
             {type === "wave"
               ? "Patients share a slot. The capacity is per slot."
-              : "Patients are spread through the window. The capacity is per window."}
+              : "Patients book the whole window as one start–end slot. The capacity is per window."}
           </p>
         </div>
 
@@ -302,40 +319,80 @@ export function AvailabilityManager({
   );
 }
 
-/** One published block: when it applies, how it is styled and how many it holds. */
-function BlockRow({ window, locked }: { window: AvailabilityRow; locked: boolean }) {
+/**
+ * One published block: when it applies, how it is styled and how many it holds.
+ *
+ * Bookings never lock the editor. A window with live visits can be shrunk,
+ * moved or closed — the server displaces anyone who no longer fits — so only
+ * removal is held back: deleting the block would erase the window those visits
+ * and its audit trail refer to. Closing it is the elastic alternative.
+ */
+function BlockRow({
+  window,
+  locked,
+  booked,
+  editing,
+  onToggleEdit,
+}: {
+  window: AvailabilityRow;
+  locked: boolean;
+  booked: number;
+  editing: boolean;
+  onToggleEdit: () => void;
+}) {
+  const closed = windowIsClosed(window);
+
   return (
-    <li className="flex flex-col gap-2 rounded-xl border border-cream-200 p-3 sm:flex-row sm:items-center sm:justify-between">
-      <div className="min-w-0">
-        <p className="text-sm font-medium text-ink-900">
-          {window.dayOfWeek !== null
-            ? `${DAYS[window.dayOfWeek]} · ${formatTime(window.startTime)} – ${formatTime(window.endTime)}`
-            : `${formatTime(window.startTime)} – ${formatTime(window.endTime)}`}
-        </p>
-        <p className="text-xs text-ink-500">
-          {window.schedulingType === "wave"
-            ? `Wave · ${window.capacity} ${window.capacity === 1 ? "patient" : "patients"} per slot · ${window.slotMinutes} min visit`
-            : `Stream · ${window.capacity} ${window.capacity === 1 ? "patient" : "patients"} in this window`}
-        </p>
-        {window.dates.length > 0 && (
-          <p className="mt-0.5 text-xs text-ink-500">
-            {window.dates.map((date) => formatDate(date)).join(", ")}
+    <li className="flex flex-col gap-2 rounded-xl border border-cream-200 p-3">
+      <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+        <div className="min-w-0">
+          <p className="text-sm font-medium text-ink-900">
+            {window.dayOfWeek !== null ? `${DAYS[window.dayOfWeek]} · ` : ""}
+            {closed
+              ? "Closed"
+              : `${formatTime(window.startTime)} – ${formatTime(window.endTime)}`}
           </p>
-        )}
+          <p className="text-xs text-ink-500">
+            {closed
+              ? "No slots offered"
+              : window.schedulingType === "wave"
+                ? `Wave · ${window.capacity} ${window.capacity === 1 ? "patient" : "patients"} per slot · ${window.slotMinutes} min visit`
+                : `Stream · ${window.capacity} ${window.capacity === 1 ? "patient" : "patients"} in this window`}
+            {booked > 0 ? ` · ${booked} booked` : ""}
+          </p>
+          {window.dates.length > 0 && (
+            <p className="mt-0.5 text-xs text-ink-500">
+              {window.dates.map((date) => formatDate(date)).join(", ")}
+            </p>
+          )}
+        </div>
+
+        <div className="flex shrink-0 items-center gap-2">
+          <Button
+            variant="outline"
+            size="sm"
+            type="button"
+            onClick={onToggleEdit}
+            aria-expanded={editing}
+          >
+            {editing ? "Close" : "Edit"}
+          </Button>
+          {locked ? (
+            <span className="text-xs font-medium text-ink-500">
+              Has upcoming bookings — edit or close it to move them
+            </span>
+          ) : (
+            <form action={removeAvailability}>
+              <input type="hidden" name="availabilityId" value={window.id} />
+              <Button variant="outline" size="sm" type="submit">
+                Remove
+              </Button>
+            </form>
+          )}
+        </div>
       </div>
 
-      {locked ? (
-        <span className="text-xs font-medium text-ink-500">
-          Has upcoming bookings — cancel them to remove
-        </span>
-      ) : (
-        <form action={removeAvailability}>
-          <input type="hidden" name="availabilityId" value={window.id} />
-          <Button variant="outline" size="sm" type="submit">
-            Remove
-          </Button>
-        </form>
-      )}
+      {editing && <AvailabilityEditForm window={window} onDone={onToggleEdit} />}
     </li>
   );
 }
