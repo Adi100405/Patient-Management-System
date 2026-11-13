@@ -195,10 +195,16 @@ plain data, which is why the rules can be tested without a database.
 
 ## Applying the schema
 
-`npm run db:migrate` adds this feature's columns, enum value, index and audit
-tables. It is additive and idempotent: it never drops or rewrites anything, so
-it is safe on a database that already carries objects the checked-in schema does
-not describe yet (the preview database holds the forgot-password tables).
+`npm run db:migrate` adds every column, enum value, index and table the deployed
+app expects: password reset, wave/stream scheduling, seats, FIFO queue truth and
+the displacement audit. It is idempotent, so running it twice is safe, and its
+statements run in one transaction, so a failure leaves the database untouched.
+
+It only adds, with one deliberate replacement: the old
+`appointments_booked_slot_unique` index allowed a single booking per slot and
+would reject the second seat of a wave slot, so it is dropped after the seat
+column exists and `appointments_booked_seat_unique` is created. Existing rows
+are backfilled with seat 1 and their original `created_at` as `queue_since`.
 
 Do **not** use `drizzle-kit push` for this. Push diffs the whole schema against
 the database and drops what it cannot explain, which would delete those

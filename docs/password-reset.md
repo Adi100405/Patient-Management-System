@@ -32,6 +32,7 @@ resetPasswordAction       CAS-claims the token (used_at), bcrypt-hashes the
 |---|---|
 | `lib/password.ts` | Pure token domain: minting, digest, lifetime, usability, session staleness. No DB, no clock — unit-tested without a Postgres. |
 | `db/schema.ts` | `password_reset_tokens` (digest only, unique) and `users.password_changed_at`. |
+| `db/migrate.ts` | The additive, transactional migration that adds both objects to a database created before this feature. |
 | `lib/auth.ts` | Boundary schemas (`forgotPasswordSchema`, `resetPasswordSchema`). |
 | `actions/auth.ts` | `forgotPasswordAction` / `resetPasswordAction` — the entire server-side flow. |
 | `lib/notifications/events.ts` | `sendPasswordResetEmail` / `sendPasswordChangedEmail` ride the notification ledger. |
