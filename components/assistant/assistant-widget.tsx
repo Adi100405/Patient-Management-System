@@ -15,9 +15,11 @@ import { ChatPanel } from "./chat-panel";
 export function AssistantWidget({
   role,
   name,
+  userId,
 }: {
   role: "patient" | "doctor";
   name: string;
+  userId: number;
 }) {
   const [open, setOpen] = useState(false);
   const panelRef = useRef<HTMLDivElement>(null);
@@ -86,7 +88,12 @@ export function AssistantWidget({
           aria-label="Medrella assistant"
           className="fixed inset-x-0 bottom-0 z-50 h-[86vh] overflow-hidden rounded-t-3xl border border-cream-200 bg-cream-50 shadow-[0_-12px_50px_-12px_rgba(33,29,24,0.35)] outline-none sm:inset-x-auto sm:bottom-24 sm:right-5 sm:h-[min(640px,calc(100vh-8rem))] sm:w-[400px] sm:rounded-3xl sm:shadow-[0_24px_60px_-20px_rgba(33,29,24,0.35)]"
         >
-          <ChatPanel role={role} name={name} onClose={() => setOpen(false)} />
+          <ChatPanel
+            role={role}
+            name={name}
+            userId={userId}
+            onClose={() => setOpen(false)}
+          />
         </div>
       )}
 

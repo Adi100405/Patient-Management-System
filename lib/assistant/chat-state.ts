@@ -1,4 +1,5 @@
-import type { Proposal } from "./types";
+import { z } from "zod";
+import type { AssistantRole, Proposal } from "./types";
 
 /**
  * The chat panel's state is a pure, serialisable value so it can be tested
@@ -131,4 +132,56 @@ export function historyFor(state: ChatState): Array<{ role: "user" | "assistant"
   return state.entries
     .slice(-MAX_HISTORY)
     .map((entry) => ({ role: entry.role, content: entry.content }));
+}
+
+/**
+ * The browser copy of a conversation.
+ *
+ * Only message text is stored. A proposal carries a signed five-minute write
+ * token, so persisting one would keep a credential after it stopped being
+ * usable. Forty entries is enough to resume a conversation without letting a
+ * transcript grow without bound in local storage.
+ */
+export const MAX_STORED_ENTRIES = 40;
+const HISTORY_STORAGE_PREFIX = "medrella.assistant.history.v1";
+const MAX_STORED_CONTENT = 2000;
+
+const storedEntrySchema = z.object({
+  id: z.string().min(1).max(200),
+  role: z.enum(["user", "assistant"]),
+  content: z.string().min(1).max(MAX_STORED_CONTENT),
+});
+
+/** Scoped by role and user so one account cannot read another's transcript. */
+export function chatHistoryKey(role: AssistantRole, userId: number): string {
+  return `${HISTORY_STORAGE_PREFIX}:${role}:${userId}`;
+}
+
+export function storeChat(state: ChatState): string {
+  return JSON.stringify(state.entries.slice(-MAX_STORED_ENTRIES));
+}
+
+/**
+ * Parse the browser copy. Anything unreadable, mistyped or injected by another
+ * tab is dropped entry by entry; a damaged history must never break the panel.
+ */
+export function restoreChat(raw: string | null): ChatState {
+  if (!raw) return emptyChat();
+
+  let value: unknown;
+  try {
+    value = JSON.parse(raw);
+  } catch (error) {
+    if (error instanceof SyntaxError) return emptyChat();
+    throw error;
+  }
+
+  if (!Array.isArray(value)) return emptyChat();
+
+  const entries = value.flatMap((item): ChatEntry[] => {
+    const parsed = storedEntrySchema.safeParse(item);
+    return parsed.success ? [parsed.data] : [];
+  });
+
+  return { entries: entries.slice(-MAX_STORED_ENTRIES), proposals: [] };
 }

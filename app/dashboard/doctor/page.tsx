@@ -417,7 +417,7 @@ export default async function DoctorDashboard() {
         </CardContent>
       </Card>
 
-      <AssistantWidget role="doctor" name={session.name} />
+      <AssistantWidget role="doctor" name={session.name} userId={session.userId} />
     </div>
   );
 }

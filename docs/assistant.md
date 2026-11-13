@@ -48,10 +48,17 @@ already has applies to the assistant too.
 ## The dashboard panel
 
 `components/assistant/assistant-widget.tsx` mounts on both dashboards with the
-signed session's role and name. It stays out of the page until tapped, then
-opens a side panel on desktop and a bottom sheet on a phone; Escape, the close
-button, the backdrop or the launcher all close it. The panel is unmounted on
-close, so no microphone or voice survives the conversation.
+signed session's role, name and user id. It stays out of the page until tapped,
+then opens a side panel on desktop and a bottom sheet on a phone; Escape, the
+close button, the backdrop or the launcher all close it. The panel is unmounted
+on close, so no microphone or voice survives the conversation.
+
+Conversation text is kept in `localStorage` under a per-role, per-user key, so
+closing the panel or reloading the page resumes the same chat. Only messages are
+stored: confirmation cards carry signed five-minute write tokens and are never
+written to storage. The copy is capped at the newest 40 entries, and the New
+chat button clears it. On a shared browser another account gets its own key, so
+one patient's transcript is not shown to the next.
 
 Inside the panel:
 
@@ -72,6 +79,8 @@ Inside the panel:
   transcript, the text returns to the box and the server's own wording (including
   the rate-limit retry delay) is shown, so a retry is one tap rather than a
   retyped question.
+- **Chat history** resumes after close or reload; the New chat button in the
+  header starts an empty transcript without touching the saved language choice.
 - **Spoken replies** are off for typed chat and switch on with the microphone;
   the speaker button toggles them independently. The reply is read by the
   device's own `speechSynthesis`, preferring an `en-IN` or `hi-IN` voice.
@@ -109,8 +118,9 @@ Language mapping:
 | Hinglish | `en-IN` (Latin-script transcription) | `en-IN` |
 
 The chat state itself (`lib/assistant/chat-state.ts`) is a pure value: entries,
-tracked proposals, six-turn history and immutable final statuses. That is what
-the tests exercise, without React or a browser.
+tracked proposals, six-turn history and immutable final statuses. The browser
+copy is parsed entry by entry with Zod, so a malformed or injected value cannot
+break the panel. That is what the tests exercise, without React or a browser.
 
 ## Configuration
 

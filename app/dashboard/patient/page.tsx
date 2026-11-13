@@ -610,7 +610,7 @@ export default async function PatientDashboard() {
         />
       )}
 
-      <AssistantWidget role="patient" name={session.name} />
+      <AssistantWidget role="patient" name={session.name} userId={session.userId} />
     </div>
   );
 }

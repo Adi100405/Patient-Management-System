@@ -2,18 +2,21 @@
 
 import { useCallback, useEffect, useId, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
-import { Send, Sparkles, Volume2, VolumeX, X } from "lucide-react";
+import { Send, Plus, Sparkles, Volume2, VolumeX, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Spinner } from "@/components/ui/spinner";
 import {
   addAssistantMessage,
   addUserMessage,
+  chatHistoryKey,
   emptyChat,
   findProposal,
   historyFor,
   isProposalExpired,
   removeEntry,
+  restoreChat,
   setProposalStatus,
+  storeChat,
   type ChatState,
 } from "@/lib/assistant/chat-state";
 import { isReplyLanguage, LANGUAGE_STORAGE_KEY, readStoredLanguage } from "@/lib/assistant/lang";
@@ -62,6 +65,29 @@ function newId(prefix: string): string {
   return `${prefix}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
 }
 
+/**
+ * Browser storage can be disabled (private mode) or full. History is a
+ * convenience, never a requirement, so those two failures degrade to an
+ * in-memory conversation instead of breaking the panel.
+ */
+function readStoredChat(key: string): string | null {
+  try {
+    return window.localStorage.getItem(key);
+  } catch (error) {
+    if (error instanceof DOMException) return null;
+    throw error;
+  }
+}
+
+function writeStoredChat(key: string, value: string): void {
+  try {
+    window.localStorage.setItem(key, value);
+  } catch (error) {
+    if (error instanceof DOMException) return;
+    throw error;
+  }
+}
+
 /** The network is untrusted: only a well-shaped proposal reaches the card. */
 function isProposal(value: unknown): value is Proposal {
   if (!value || typeof value !== "object") return false;
@@ -88,16 +114,21 @@ function isProposal(value: unknown): value is Proposal {
 export function ChatPanel({
   role,
   name,
+  userId,
   onClose,
 }: {
   role: "patient" | "doctor";
   name: string;
+  userId: number;
   onClose: () => void;
 }) {
   const router = useRouter();
   const inputId = useId();
+  const historyKey = chatHistoryKey(role, userId);
 
-  const [state, setState] = useState<ChatState>(emptyChat);
+  const [state, setState] = useState<ChatState>(() =>
+    typeof window === "undefined" ? emptyChat() : restoreChat(readStoredChat(historyKey)),
+  );
   const [input, setInput] = useState("");
   // The panel only mounts on the client, so the saved choice can be read once
   // during the first render instead of flashing English first.
@@ -120,6 +151,12 @@ export function ChatPanel({
   useEffect(() => {
     stateRef.current = state;
   }, [state]);
+
+  // The transcript survives closing the panel and reloading this browser. A
+  // new message rewrites the copy; cards are deliberately never stored.
+  useEffect(() => {
+    writeStoredChat(historyKey, storeChat(state));
+  }, [historyKey, state]);
   useEffect(() => {
     languageRef.current = language;
   }, [language]);
@@ -347,6 +384,16 @@ export function ChatPanel({
     voice.start();
   };
 
+  const startNewChat = () => {
+    voice.stop();
+    speech.cancel();
+    setState(emptyChat());
+    setPayments([]);
+    setInput("");
+    setInterim("");
+    setVoiceError(null);
+  };
+
   const firstName = name.replace(/^Dr\.?\s+/i, "").split(/\s+/)[0] || name;
   const suggestions = SUGGESTIONS[role];
 
@@ -368,6 +415,17 @@ export function ChatPanel({
           </div>
         </div>
         <div className="flex shrink-0 items-center gap-1">
+          <Button
+            type="button"
+            variant="ghost"
+            size="icon"
+            onClick={startNewChat}
+            disabled={state.entries.length === 0 && state.proposals.length === 0}
+            aria-label="Start a new chat"
+            title="Start a new chat"
+          >
+            <Plus className="h-4 w-4" />
+          </Button>
           <LanguagePicker
             value={language}
             onChange={(next) => {
