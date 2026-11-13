@@ -3,6 +3,7 @@ import { AlertTriangle, Calendar, Clock, Users } from "lucide-react";
 import { getDb } from "@/db";
 import { appointments, availability, patients } from "@/db/schema";
 import { AppointmentActions } from "@/components/appointment-actions";
+import { AssistantWidget } from "@/components/assistant/assistant-widget";
 import { AvailabilityManager, type AvailabilityRow } from "@/components/availability-manager";
 import { CancelAppointment } from "@/components/cancel-appointment";
 import { Badge } from "@/components/ui/badge";
@@ -415,6 +416,8 @@ export default async function DoctorDashboard() {
           )}
         </CardContent>
       </Card>
+
+      <AssistantWidget role="doctor" name={session.name} userId={session.userId} />
     </div>
   );
 }
