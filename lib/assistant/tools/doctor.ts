@@ -47,6 +47,9 @@ async function appointmentsOn(ctx: AssistantContext, date: string) {
       status: appointments.status,
       seatNumber: appointments.seatNumber,
       queueSince: appointments.queueSince,
+      checkedInAt: appointments.checkedInAt,
+      tokenNumber: appointments.tokenNumber,
+      servingStartedAt: appointments.servingStartedAt,
       patientName: patients.fullName,
       patientPhone: patients.phone,
       schedulingType: availability.schedulingType,
@@ -67,26 +70,54 @@ async function appointmentsOn(ctx: AssistantContext, date: string) {
       asc(appointments.id),
     );
 
-  const queuePlace = new Map<string, number>();
-  return rows.map((row) => {
-    let position: number | null = null;
-    if (row.status === "booked") {
-      const next = (queuePlace.get(row.time) ?? 0) + 1;
-      queuePlace.set(row.time, next);
-      position = next;
+  // Where the visit sits in the booking order of its slot — the order people
+  // booked, which is all a future day can honestly claim.
+  const bookingOrder = new Map<number, number>();
+  const perSlot = new Map<string, number>();
+  for (const row of rows) {
+    if (row.status !== "booked") continue;
+    const next = (perSlot.get(row.time) ?? 0) + 1;
+    perSlot.set(row.time, next);
+    bookingOrder.set(row.id, next);
+  }
+
+  // Today's live queue: the order people checked in at the desk. Only today
+  // has one, so only today gets a place in it.
+  const livePosition = new Map<number, number>();
+  if (date === today()) {
+    const checkedIn = rows
+      .filter((row) => row.status === "booked" && row.checkedInAt !== null)
+      .sort((a, b) => {
+        const aTime = a.checkedInAt ? new Date(a.checkedInAt).getTime() : 0;
+        const bTime = b.checkedInAt ? new Date(b.checkedInAt).getTime() : 0;
+        if (aTime !== bTime) return aTime - bTime;
+        return a.id - b.id;
+      });
+    let place = 0;
+    for (const row of checkedIn) {
+      // The patient in the room is not waiting in line any more.
+      if (row.servingStartedAt) continue;
+      place += 1;
+      livePosition.set(row.id, place);
     }
-    return {
-      id: row.id,
-      patientName: row.patientName,
-      // PHI shaping: the assistant can confirm the number on file, never read it.
-      patientPhone: maskPhone(row.patientPhone),
-      when: whenLabel(row),
-      time: row.time,
-      status: row.status,
-      seatNumber: row.seatNumber,
-      queuePosition: position,
-    };
-  });
+  }
+
+  return rows.map((row) => ({
+    id: row.id,
+    patientName: row.patientName,
+    // PHI shaping: the assistant can confirm the number on file, never read it.
+    patientPhone: maskPhone(row.patientPhone),
+    when: whenLabel(row),
+    time: row.time,
+    status: row.status,
+    seatNumber: row.seatNumber,
+    bookingOrder: bookingOrder.get(row.id) ?? null,
+    checkedIn: row.checkedInAt !== null,
+    checkedInAt: row.checkedInAt ? row.checkedInAt.toISOString() : null,
+    token: row.tokenNumber === null ? null : `T-${String(row.tokenNumber).padStart(2, "0")}`,
+    serving: row.servingStartedAt !== null,
+    queuePosition: livePosition.get(row.id) ?? null,
+  }));
 }
 
 /** The dashboard's four count filters, one row. */
@@ -163,7 +194,7 @@ export const doctorDefinitions: ToolDefinition[] = [
     function: {
       name: "appointments_for_date",
       description:
-        "The doctor's schedule for one date: visits with patient, status and queue place. Defaults to today. Use for 'who is coming in'.",
+        "The doctor's schedule for one date: visits with patient, status and booking order, plus, for today, who has checked in, their token and their place in the queue. Defaults to today. Use for 'who is coming in' and 'who is next'.",
       parameters: {
         type: "object",
         properties: {

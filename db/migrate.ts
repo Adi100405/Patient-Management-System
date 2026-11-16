@@ -107,6 +107,32 @@ const STATEMENTS: readonly string[] = [
   `create index if not exists appointments_slot_queue_idx
      on appointments (doctor_id, appointment_date, appointment_time, queue_since, id)`,
 
+  // The clinic desk: when a patient arrived, the token on their slip, and
+  // when the doctor called them in. All three are additive and start empty,
+  // so a booking made before this feature simply reads as "not checked in".
+  `alter table appointments add column if not exists checked_in_at timestamptz`,
+  `alter table appointments add column if not exists token_number integer`,
+  `alter table appointments add column if not exists serving_started_at timestamptz`,
+  `do $$ begin
+     alter table appointments add constraint appointments_token_positive
+       check (token_number is null or token_number >= 1);
+   exception when duplicate_object then null; end $$`,
+
+  // A token belongs to one doctor on one day and is never handed out twice.
+  `create unique index if not exists appointments_doctor_day_token_unique
+     on appointments (doctor_id, appointment_date, token_number)
+     where token_number is not null`,
+
+  // One patient in the room at a time. Only booked visits hold the room, so
+  // finishing or cancelling the current patient frees it for the next one.
+  `create unique index if not exists appointments_doctor_day_serving_unique
+     on appointments (doctor_id, appointment_date)
+     where serving_started_at is not null and status = 'booked'`,
+
+  // The live queue read for one doctor on one day.
+  `create index if not exists appointments_doctor_day_checkin_idx
+     on appointments (doctor_id, appointment_date, checked_in_at)`,
+
   // `needs_rebooking` is an exception state, not history: the visit keeps its
   // payment and waits for a new time.
   `alter type appointment_status add value if not exists 'needs_rebooking'`,

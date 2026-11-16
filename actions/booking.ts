@@ -440,6 +440,14 @@ export async function rescheduleAppointment(
   if (appointment.status !== "booked" && appointment.status !== "needs_rebooking") {
     return { error: "Only live appointments can be rescheduled." };
   }
+  // A patient who is at the desk has already been given a token and a place in
+  // the queue. Moving the visit underneath them would break both, so the
+  // clinic has to do it.
+  if (appointment.checkedInAt) {
+    return {
+      error: "You are checked in for this visit. Ask the clinic to move it for you.",
+    };
+  }
   if (
     appointment.status === "booked" &&
     appointment.appointmentDate === date &&
