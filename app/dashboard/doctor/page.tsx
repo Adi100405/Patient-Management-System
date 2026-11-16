@@ -329,6 +329,8 @@ export default async function DoctorDashboard() {
         </div>
       </Card>
 
+      <QueueBoard date={now.date} rows={queueRows} />
+
       <Card>
         <CardHeader>
           <CardTitle>Availability</CardTitle>
@@ -367,8 +369,6 @@ export default async function DoctorDashboard() {
           </CardContent>
         </Card>
       )}
-
-      <QueueBoard date={now.date} rows={queueRows} />
 
       <Card>
         <CardHeader>
