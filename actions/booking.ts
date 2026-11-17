@@ -343,6 +343,10 @@ export async function resolveAppointment(
         eq(appointments.doctorId, session.profileId),
         eq(appointments.status, "booked"),
         or(
+          // A patient the desk checked in has arrived, whatever the clock says.
+          // The queue calls people in up to an hour before their slot, so the
+          // doctor can finish an early visit without waiting for its time.
+          isNotNull(appointments.checkedInAt),
           lt(appointments.appointmentDate, now.date),
           and(
             eq(appointments.appointmentDate, now.date),
