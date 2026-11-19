@@ -8,6 +8,7 @@ import {
   availability,
   availabilityDates,
   doctors,
+  medicalHistoryEntries,
   patients,
   payments,
   receptionists,
@@ -248,6 +249,7 @@ async function main() {
       userId: patientUser!.id,
       fullName: "Riya Sharma",
       phone: "+91 98765 43210",
+      dateOfBirth: "1994-06-18",
       gender: "Female",
     })
     .returning({ id: patients.id });
@@ -271,12 +273,17 @@ async function main() {
   // The demo doctor's Friday stream, captured so the seed can book a visit in
   // it — a booked window is what the elastic-edit guards stand on.
   let fridayStreamId: number | undefined;
+  // The author recorded on the demo medical history, so the audit trail names
+  // a real account rather than a string with no profile behind it.
+  let demoDoctorUserId: number | undefined;
 
   for (const seed of DOCTORS) {
     const [user] = await db
       .insert(users)
       .values({ email: seed.email, passwordHash, role: "doctor" })
       .returning({ id: users.id });
+
+    if (seed.email === "doctor@demo.com") demoDoctorUserId = user!.id;
 
     const [doctor] = await db
       .insert(doctors)
@@ -319,13 +326,43 @@ async function main() {
     }
   }
 
-  console.log("Adding past appointments for history…");
   const daysAgo = (count: number) => {
     const date = new Date();
     date.setDate(date.getDate() - count);
     return localDate(date);
   };
 
+  console.log("Adding medical history revisions…");
+  // Two snapshots, so the demo record already has an audit trail: the first
+  // visit recorded the allergy, the follow-up widened it and added medication.
+  await db.insert(medicalHistoryEntries).values([
+    {
+      patientId: patient!.id,
+      bloodGroup: "O+",
+      allergies: "Penicillin",
+      conditions: "Mild hypertension",
+      medications: null,
+      notes: "Prefers morning appointments.",
+      recordedByUserId: demoDoctorUserId ?? null,
+      recordedByName: "Aarav Mehta",
+      recordedByRole: "doctor",
+      createdAt: new Date(`${daysAgo(90)}T10:15:00+05:30`),
+    },
+    {
+      patientId: patient!.id,
+      bloodGroup: "O+",
+      allergies: "Penicillin, sulfa drugs",
+      conditions: "Mild hypertension",
+      medications: "Amlodipine 5 mg, once daily",
+      notes: "Prefers morning appointments.",
+      recordedByUserId: demoDoctorUserId ?? null,
+      recordedByName: "Aarav Mehta",
+      recordedByRole: "doctor",
+      createdAt: new Date(`${daysAgo(3)}T10:45:00+05:30`),
+    },
+  ]);
+
+  console.log("Adding past appointments for history…");
   await db.insert(appointments).values([
     {
       patientId: patient!.id,

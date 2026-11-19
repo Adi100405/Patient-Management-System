@@ -366,6 +366,56 @@ export const visitNotes = pgTable("visit_notes", {
 
 export type VisitNote = typeof visitNotes.$inferSelect;
 
+/**
+ * One saved revision of a patient's medical history.
+ *
+ * The table is append-only: a save inserts a complete snapshot, the newest row
+ * is the current record, and the older rows are the update history. There is no
+ * update or delete path in the app.
+ *
+ * That shape is deliberate. The Neon HTTP driver has no transactions, so a
+ * "current row plus audit row" pair could drift if the second write failed.
+ * One insert is one version, which makes the audit trail the only source of
+ * truth rather than a copy of it.
+ *
+ * `bloodGroup`, `allergies`, `conditions`, `medications` and `notes` are null
+ * when they were never recorded. Null is not the same as "none": the UI says
+ * "Not recorded" rather than implying a negative answer.
+ *
+ * The author is snapshotted by name and role so the audit still reads correctly
+ * if the doctor's profile is later renamed or deleted.
+ */
+export const medicalHistoryEntries = pgTable(
+  "medical_history_entries",
+  {
+    id: serial("id").primaryKey(),
+    patientId: integer("patient_id")
+      .notNull()
+      .references(() => patients.id, { onDelete: "cascade" }),
+    bloodGroup: text("blood_group"),
+    allergies: text("allergies"),
+    conditions: text("conditions"),
+    medications: text("medications"),
+    notes: text("notes"),
+    recordedByUserId: integer("recorded_by_user_id").references(() => users.id, {
+      onDelete: "set null",
+    }),
+    recordedByName: text("recorded_by_name").notNull(),
+    recordedByRole: text("recorded_by_role").notNull(),
+    createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+  },
+  (table) => [
+    /** The patient page reads the newest revision first, then the trail. */
+    index("medical_history_entries_patient_created_idx").on(
+      table.patientId,
+      table.createdAt,
+      table.id,
+    ),
+  ],
+);
+
+export type MedicalHistoryEntry = typeof medicalHistoryEntries.$inferSelect;
+
 export const payments = pgTable("payments", {
   id: serial("id").primaryKey(),
   appointmentId: integer("appointment_id")
