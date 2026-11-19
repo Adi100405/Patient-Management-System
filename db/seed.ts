@@ -10,6 +10,7 @@ import {
   doctors,
   patients,
   payments,
+  receptionists,
   users,
 } from "../db/schema";
 import { streamSpacing } from "../lib/schedule";
@@ -251,6 +252,20 @@ async function main() {
     })
     .returning({ id: patients.id });
 
+  console.log("Creating demo receptionist…");
+  // The front desk is staff, so the clinic creates the account — not the
+  // doctors. Until the clinic has an admin screen, the demo receptionist is
+  // seeded here, and there is no public way to become one.
+  const [receptionistUser] = await db
+    .insert(users)
+    .values({ email: "receptionist@demo.com", passwordHash, role: "receptionist" })
+    .returning({ id: users.id });
+
+  await db.insert(receptionists).values({
+    userId: receptionistUser!.id,
+    fullName: "Meera Iyer",
+  });
+
   console.log("Creating doctors and availability…");
   const doctorIds: number[] = [];
   // The demo doctor's Friday stream, captured so the seed can book a visit in
@@ -363,8 +378,9 @@ async function main() {
   }
 
   console.log("Seed complete.");
-  console.log("  Patient  → patient@demo.com / password123");
-  console.log("  Doctor   → doctor@demo.com / password123");
+  console.log("  Patient     → patient@demo.com / password123");
+  console.log("  Doctor      → doctor@demo.com / password123");
+  console.log("  Receptionist→ receptionist@demo.com / password123");
 }
 
 main()
