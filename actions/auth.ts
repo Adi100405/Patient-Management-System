@@ -8,6 +8,7 @@ import {
   doctors,
   passwordResetTokens,
   patients,
+  receptionists,
   users,
 } from "@/db/schema";
 import {
@@ -253,6 +254,23 @@ export async function signInAction(_prev: AuthState, formData: FormData): Promis
       profileId: doctor.id,
     });
     redirect("/dashboard/doctor");
+  }
+
+  // The front desk signs in with the account the invitation created.
+  if (user.role === "receptionist") {
+    const [receptionist] = await db
+      .select()
+      .from(receptionists)
+      .where(eq(receptionists.userId, user.id))
+      .limit(1);
+    if (!receptionist) return { error: "Receptionist profile is missing. Please contact support." };
+    await createSession({
+      userId: user.id,
+      role: "receptionist",
+      name: receptionist.fullName,
+      profileId: receptionist.id,
+    });
+    redirect("/dashboard/receptionist");
   }
 
   const [patient] = await db.select().from(patients).where(eq(patients.userId, user.id)).limit(1);

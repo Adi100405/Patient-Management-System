@@ -1,6 +1,6 @@
 "use server";
 
-import { and, eq, max, sql } from "drizzle-orm";
+import { and, eq, isNull, lte, max, sql } from "drizzle-orm";
 import { revalidatePath } from "next/cache";
 import { getDb } from "@/db";
 import {
@@ -12,7 +12,7 @@ import { isUniqueViolation } from "@/lib/db-errors";
 import { checkInWindow, formatToken } from "@/lib/queue";
 import { doctorQueueView } from "@/lib/queue-data";
 import { requireSession } from "@/lib/session";
-import { clinicNow } from "@/lib/slots";
+import { clinicClock, clinicNow } from "@/lib/slots";
 
 export type QueueActionState = { error?: string } | null;
 
@@ -41,19 +41,19 @@ async function nextToken(db: Db, doctorId: number, date: string): Promise<number
 /**
  * Checks a patient in at the desk and gives them their token.
  *
- * Only the doctor who owns the visit can do it, and only for a visit that is
- * booked, today, and inside its check-in window. The write is guarded on the
- * visit not being checked in yet, so two clicks — or two desks at once — can
- * never check the same patient in twice: the second attempt simply finds
- * nothing to update.
+ * The front desk does this, for any doctor in the clinic: the doctor does
+ * not sit at reception, so the desk is the one place a patient arrives. The
+ * write is guarded on the visit not being checked in yet, so two clicks — or
+ * two desks at once — can never check the same patient in twice: the second
+ * attempt simply finds nothing to update.
  */
 export async function checkInAppointment(
   _prev: QueueActionState,
   formData: FormData,
 ): Promise<QueueActionState> {
   const session = await requireSession();
-  if (session.role !== "doctor") {
-    return { error: "Only the clinic can check a patient in." };
+  if (session.role !== "receptionist") {
+    return { error: "Only the front desk can check a patient in." };
   }
 
   const id = Number(formData.get("appointmentId"));
@@ -65,6 +65,7 @@ export async function checkInAppointment(
   const [appointment] = await db
     .select({
       id: appointments.id,
+      doctorId: appointments.doctorId,
       status: appointments.status,
       date: appointments.appointmentDate,
       time: appointments.appointmentTime,
@@ -72,9 +73,7 @@ export async function checkInAppointment(
       tokenNumber: appointments.tokenNumber,
     })
     .from(appointments)
-    .where(
-      and(eq(appointments.id, id), eq(appointments.doctorId, session.profileId)),
-    )
+    .where(eq(appointments.id, id))
     .limit(1);
 
   if (!appointment) return { error: "That appointment was not found." };
@@ -99,7 +98,9 @@ export async function checkInAppointment(
   }
 
   for (let attempt = 1; attempt <= MAX_TOKEN_ATTEMPTS; attempt += 1) {
-    const token = await nextToken(db, session.profileId, appointment.date);
+    // The token belongs to the visit's doctor and day, not to whoever is at
+    // the desk: the number on the slip means the same thing on every board.
+    const token = await nextToken(db, appointment.doctorId, appointment.date);
     try {
       const updated = await db
         .update(appointments)
@@ -107,7 +108,6 @@ export async function checkInAppointment(
         .where(
           and(
             eq(appointments.id, appointment.id),
-            eq(appointments.doctorId, session.profileId),
             eq(appointments.status, "booked"),
             sql`${appointments.checkedInAt} is null`,
           ),
@@ -116,6 +116,7 @@ export async function checkInAppointment(
 
       if (updated.length > 0) {
         revalidatePath("/dashboard/doctor");
+        revalidatePath("/dashboard/receptionist");
         revalidatePath("/dashboard/patient");
         return null;
       }
@@ -136,12 +137,13 @@ export async function checkInAppointment(
  *
  * The order is the order people checked in. One patient at a time is in the
  * room: the database refuses a second one, so two clicks can never put two
- * people in front of the doctor at once.
+ * people in front of the doctor at once. The doctor calls them in — the desk
+ * hands out the tokens.
  */
 export async function callNextPatient(): Promise<QueueActionState> {
   const session = await requireSession();
   if (session.role !== "doctor") {
-    return { error: "Only the clinic can call the next patient." };
+    return { error: "Only the doctor can call the next patient." };
   }
 
   const date = clinicNow().date;
@@ -179,6 +181,81 @@ export async function callNextPatient(): Promise<QueueActionState> {
   }
 
   revalidatePath("/dashboard/doctor");
+  revalidatePath("/dashboard/receptionist");
+  revalidatePath("/dashboard/patient");
+  return null;
+}
+
+/**
+ * Records that a patient never turned up.
+ *
+ * This is the desk's own outcome, for the one case the desk can see: the
+ * visit is booked for today, its slot time has passed, and nobody ever
+ * checked in — so there is no token and nobody was waiting. A patient who
+ * did check in and then left is a clinical outcome, and the doctor closes it.
+ */
+export async function markNoShowAtDesk(
+  _prev: QueueActionState,
+  formData: FormData,
+): Promise<QueueActionState> {
+  const session = await requireSession();
+  if (session.role !== "receptionist") {
+    return { error: "Only the front desk can record a no-show." };
+  }
+
+  const id = Number(formData.get("appointmentId"));
+  if (!Number.isInteger(id) || id <= 0) {
+    return { error: "That request could not be understood." };
+  }
+
+  const db = getDb();
+  // One instant for both the date and the clock, so they can never disagree
+  // if the clinic day flips between the two reads.
+  const instant = new Date();
+  const now = clinicNow(instant);
+
+  const updated = await db
+    .update(appointments)
+    .set({ status: "no_show" })
+    .where(
+      and(
+        eq(appointments.id, id),
+        eq(appointments.status, "booked"),
+        eq(appointments.appointmentDate, now.date),
+        isNull(appointments.checkedInAt),
+        lte(appointments.appointmentTime, clinicClock(instant)),
+      ),
+    )
+    .returning({ id: appointments.id });
+
+  if (updated.length === 0) {
+    // Diagnose the miss so the desk sees why, instead of a silent no-op.
+    const [appointment] = await db
+      .select({
+        status: appointments.status,
+        date: appointments.appointmentDate,
+        time: appointments.appointmentTime,
+        checkedInAt: appointments.checkedInAt,
+      })
+      .from(appointments)
+      .where(eq(appointments.id, id))
+      .limit(1);
+
+    if (!appointment) return { error: "That appointment was not found." };
+    if (appointment.status !== "booked") {
+      return { error: "That visit has already been resolved." };
+    }
+    if (appointment.checkedInAt) {
+      return { error: "That patient has already checked in." };
+    }
+    if (appointment.date !== now.date) {
+      return { error: "Only today's visits can be closed at the desk." };
+    }
+    return { error: "That visit is not due yet." };
+  }
+
+  revalidatePath("/dashboard/doctor");
+  revalidatePath("/dashboard/receptionist");
   revalidatePath("/dashboard/patient");
   return null;
 }

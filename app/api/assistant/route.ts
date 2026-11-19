@@ -163,6 +163,17 @@ export async function POST(request: Request) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
 
+  // The front desk is not an assistant customer: the assistant's tools are
+  // patient and doctor tools, and a receptionist must not fall through to
+  // the patient's ones.
+  const role = session.role;
+  if (role === "receptionist") {
+    return NextResponse.json(
+      { error: "The assistant is not available for front-desk accounts." },
+      { status: 403 },
+    );
+  }
+
   if (!withinRateLimit(session.userId)) {
     return NextResponse.json(
       { error: "That is a lot of messages at once. Give it a moment, then continue." },
@@ -183,7 +194,7 @@ export async function POST(request: Request) {
   const history = sanitizeHistory(body?.history);
   const ctx: AssistantContext = {
     userId: session.userId,
-    role: session.role,
+    role,
     profileId: session.profileId,
     name: session.name,
   };
@@ -203,12 +214,12 @@ export async function POST(request: Request) {
     );
   }
 
-  const tools = toolDefinitionsFor(session.role);
+  const tools = toolDefinitionsFor(role);
   const messages: ChatMessage[] = [
     {
       role: "system",
       content: buildSystemPrompt({
-        role: session.role,
+        role,
         name: session.name,
         language,
         today: clinicNow().date,

@@ -329,7 +329,7 @@ export default async function DoctorDashboard() {
         </div>
       </Card>
 
-      <QueueBoard date={now.date} rows={queueRows} />
+      <QueueBoard date={now.date} rows={queueRows} mode="doctor" />
 
       <Card>
         <CardHeader>

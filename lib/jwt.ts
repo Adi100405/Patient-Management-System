@@ -2,9 +2,12 @@ import { SignJWT, jwtVerify } from "jose";
 
 export const SESSION_COOKIE = "pms_session";
 
+/** Who a session can belong to. The receptionist is the clinic's front desk. */
+export type SessionRole = "patient" | "doctor" | "receptionist";
+
 export type SessionPayload = {
   userId: number;
-  role: "patient" | "doctor";
+  role: SessionRole;
   name: string;
   profileId: number;
   /**
@@ -35,7 +38,9 @@ export async function verifySession(token: string): Promise<SessionPayload | nul
       typeof payload.userId === "number" &&
       typeof payload.profileId === "number" &&
       typeof payload.iat === "number" &&
-      (payload.role === "patient" || payload.role === "doctor") &&
+      (payload.role === "patient" ||
+        payload.role === "doctor" ||
+        payload.role === "receptionist") &&
       typeof payload.name === "string"
     ) {
       return {
