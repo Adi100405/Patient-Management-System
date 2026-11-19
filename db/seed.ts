@@ -13,6 +13,7 @@ import {
   payments,
   receptionists,
   users,
+  visitNotes,
 } from "../db/schema";
 import { streamSpacing } from "../lib/schedule";
 
@@ -363,26 +364,42 @@ async function main() {
   ]);
 
   console.log("Adding past appointments for history…");
-  await db.insert(appointments).values([
-    {
-      patientId: patient!.id,
-      doctorId: doctorIds[0]!,
-      appointmentDate: daysAgo(3),
-      appointmentTime: "10:00",
-      seatNumber: 1,
-      status: "completed",
-      reason: "Routine cardiac check-up",
-    },
-    {
-      patientId: patient!.id,
-      doctorId: doctorIds[0]!,
-      appointmentDate: daysAgo(5),
-      appointmentTime: "16:00",
-      seatNumber: 1,
-      status: "no_show",
-      reason: "Follow-up for palpitations",
-    },
-  ]);
+  const pastVisits = await db
+    .insert(appointments)
+    .values([
+      {
+        patientId: patient!.id,
+        doctorId: doctorIds[0]!,
+        appointmentDate: daysAgo(3),
+        appointmentTime: "10:00",
+        seatNumber: 1,
+        status: "completed",
+        reason: "Routine cardiac check-up",
+      },
+      {
+        patientId: patient!.id,
+        doctorId: doctorIds[0]!,
+        appointmentDate: daysAgo(5),
+        appointmentTime: "16:00",
+        seatNumber: 1,
+        status: "no_show",
+        reason: "Follow-up for palpitations",
+      },
+    ])
+    .returning({ id: appointments.id, status: appointments.status });
+
+  const completedVisit = pastVisits.find((visit) => visit.status === "completed");
+  if (completedVisit) {
+    await db.insert(visitNotes).values({
+      appointmentId: completedVisit.id,
+      diagnosis: "Stable angina",
+      summary:
+        "Reviewed the recent episodes and today's ECG. No acute changes; the current medication is controlling symptoms.",
+      aftercare:
+        "Take Amlodipine at the same time each day. Avoid strenuous activity for 48 hours and return if chest pain worsens.",
+      followUpDays: 14,
+    });
+  }
 
   if (fridayStreamId) {
     console.log("Booking the demo patient into the Friday stream…");

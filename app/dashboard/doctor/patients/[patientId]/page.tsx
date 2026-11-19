@@ -61,6 +61,8 @@ export default async function DoctorPatientRecordPage({
         tokenNumber: appointments.tokenNumber,
         doctorName: doctors.fullName,
         specialization: doctors.specialization,
+        diagnosis: visitNotes.diagnosis,
+        summary: visitNotes.summary,
         aftercare: visitNotes.aftercare,
         followUpDays: visitNotes.followUpDays,
       })

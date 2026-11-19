@@ -1,4 +1,5 @@
 import { Calendar } from "lucide-react";
+import { VisitDetails } from "@/components/visit-details";
 import { Badge } from "@/components/ui/badge";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import type { AppointmentStatus } from "@/db/schema";
@@ -37,6 +38,8 @@ export type VisitHistoryRow = {
   readonly tokenNumber: number | null;
   readonly doctorName: string;
   readonly specialization: string;
+  readonly diagnosis: string | null;
+  readonly summary: string | null;
   readonly aftercare: string | null;
   readonly followUpDays: number | null;
 };
@@ -100,27 +103,9 @@ export function VisitHistory({ rows }: { rows: readonly VisitHistoryRow[] }) {
                   </div>
                 </div>
 
-                {row.status === "completed" &&
-                  (row.aftercare || row.followUpDays !== null) && (
-                    <div className="mt-3 space-y-2 rounded-lg border border-cream-200 bg-cream-50/60 px-3 py-2">
-                      {row.aftercare && (
-                        <div>
-                          <p className="text-[11px] font-semibold uppercase tracking-wide text-ink-500">
-                            Aftercare
-                          </p>
-                          <p className="mt-1 whitespace-pre-line text-sm text-ink-700">
-                            {row.aftercare}
-                          </p>
-                        </div>
-                      )}
-                      {row.followUpDays !== null && (
-                        <p className="text-xs text-ink-600">
-                          Follow-up advised in {row.followUpDays}{" "}
-                          {row.followUpDays === 1 ? "day" : "days"}.
-                        </p>
-                      )}
-                    </div>
-                  )}
+                {row.status === "completed" && (
+                  <VisitDetails details={row} className="mt-3" />
+                )}
               </li>
             ))}
           </ol>

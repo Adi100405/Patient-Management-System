@@ -343,21 +343,29 @@ export const appointments = pgTable(
 );
 
 /**
- * Doctor-authored aftercare for a completed visit. One row per appointment,
+ * What the doctor records when a visit is completed. One row per appointment,
  * written at the moment the doctor resolves the visit.
  *
- * `aftercare` is medical content (PHI): it is shown **only** on the patient's
- * own dashboard and is never copied into an email or mobile message. The
- * follow-up loop links to it, it does not quote it.
+ * `diagnosis` is the short clinical conclusion and `summary` is what was found
+ * and done during the consultation. `aftercare` is the instruction the patient
+ * takes home, and `followUpDays` is the doctor's recommendation ("come back in
+ * two weeks").
  *
- * `followUpDays` is the doctor's recommendation ("come back in two weeks"). Null
- * means no follow-up was advised, and therefore no follow-up prompt is sent;
- * the loop stays silent rather than nagging on a guess.
+ * All four are medical content (PHI). They are shown **only** on the patient's
+ * own dashboard and the treating doctor's patient record, and are never copied
+ * into an email or mobile message. The follow-up loop links to the dashboard;
+ * it does not quote the notes.
+ *
+ * A null `followUpDays` means no follow-up was advised, and therefore no
+ * follow-up prompt is sent; the loop stays silent rather than nagging on a
+ * guess.
  */
 export const visitNotes = pgTable("visit_notes", {
   appointmentId: integer("appointment_id")
     .primaryKey()
     .references(() => appointments.id, { onDelete: "cascade" }),
+  diagnosis: text("diagnosis"),
+  summary: text("summary"),
   aftercare: text("aftercare"),
   followUpDays: integer("follow_up_days"),
   createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
