@@ -12,6 +12,7 @@ import { buildQueue, type QueueEntry, type QueueRow, type QueueView } from "./qu
  */
 
 export type DoctorQueueRow = QueueRow & {
+  readonly patientId: number;
   readonly patientName: string;
   readonly patientPhone: string | null;
 };
@@ -25,6 +26,7 @@ export async function doctorQueueForDate(
   return db
     .select({
       id: appointments.id,
+      patientId: appointments.patientId,
       status: appointments.status,
       appointmentTime: appointments.appointmentTime,
       checkedInAt: appointments.checkedInAt,

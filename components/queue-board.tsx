@@ -1,3 +1,4 @@
+import Link from "next/link";
 import { Check, CircleSlash, Clock, LogIn, Users } from "lucide-react";
 import { AppointmentActions } from "@/components/appointment-actions";
 import { CallNextButton, CheckInButton, NoShowButton } from "@/components/queue-actions";
@@ -77,9 +78,14 @@ export function QueueBoard({
                   {serving.token ?? "—"}
                 </span>
                 <div className="space-y-1">
-                  <p className="font-semibold text-ink-900">
-                    {byId.get(serving.id)?.patientName ?? "Patient"}
-                  </p>
+                  <div className="flex flex-wrap items-center gap-2">
+                    <p className="font-semibold text-ink-900">
+                      {byId.get(serving.id)?.patientName ?? "Patient"}
+                    </p>
+                    {mode === "doctor" && (
+                      <RecordLink patientId={byId.get(serving.id)?.patientId} />
+                    )}
+                  </div>
                   <p className="text-xs text-ink-600">
                     {formatTime(serving.appointmentTime)}
                     {serving.checkedInAt && (
@@ -128,9 +134,14 @@ export function QueueBoard({
                       #{entry.position}
                     </span>
                     <div className="space-y-1">
-                      <p className="font-semibold text-ink-900">
-                        {byId.get(entry.id)?.patientName ?? "Patient"}
-                      </p>
+                      <div className="flex flex-wrap items-center gap-2">
+                        <p className="font-semibold text-ink-900">
+                          {byId.get(entry.id)?.patientName ?? "Patient"}
+                        </p>
+                        {mode === "doctor" && (
+                          <RecordLink patientId={byId.get(entry.id)?.patientId} />
+                        )}
+                      </div>
                       <p className="text-xs text-ink-600">
                         <span className="tabular-nums">
                           {formatTime(entry.appointmentTime)}
@@ -220,5 +231,18 @@ export function QueueBoard({
         </section>
       </CardContent>
     </Card>
+  );
+}
+
+/** A doctor-facing shortcut to the patient's record; the front desk never gets one. */
+function RecordLink({ patientId }: { patientId: number | undefined }) {
+  if (patientId === undefined) return null;
+  return (
+    <Link
+      href={`/dashboard/doctor/patients/${patientId}`}
+      className="rounded-full border border-cream-300 px-2 py-0.5 text-[11px] font-medium text-teal-700 transition-colors hover:border-teal-300 hover:bg-teal-50"
+    >
+      Patient record
+    </Link>
   );
 }

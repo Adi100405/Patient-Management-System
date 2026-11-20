@@ -185,6 +185,25 @@ const STATEMENTS: readonly string[] = [
      full_name text not null,
      created_at timestamptz not null default now()
    )`,
+
+  // Medical history is an append-only log of full snapshots. The newest row is
+  // the current record; older rows are the audit trail. No update or delete
+  // statement is ever issued against this table.
+  `create table if not exists medical_history_entries (
+     id serial primary key,
+     patient_id integer not null references patients(id) on delete cascade,
+     blood_group text,
+     allergies text,
+     conditions text,
+     medications text,
+     notes text,
+     recorded_by_user_id integer references users(id) on delete set null,
+     recorded_by_name text not null,
+     recorded_by_role text not null,
+     created_at timestamptz not null default now()
+   )`,
+  `create index if not exists medical_history_entries_patient_created_idx
+     on medical_history_entries (patient_id, created_at, id)`,
 ];
 
 async function columnExists(table: string, column: string) {
