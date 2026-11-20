@@ -8,9 +8,12 @@ import {
   availability,
   availabilityDates,
   doctors,
+  medicalHistoryEntries,
   patients,
   payments,
+  receptionists,
   users,
+  visitNotes,
 } from "../db/schema";
 import { streamSpacing } from "../lib/schedule";
 
@@ -247,21 +250,41 @@ async function main() {
       userId: patientUser!.id,
       fullName: "Riya Sharma",
       phone: "+91 98765 43210",
+      dateOfBirth: "1994-06-18",
       gender: "Female",
     })
     .returning({ id: patients.id });
+
+  console.log("Creating demo receptionist…");
+  // The front desk is staff, so the clinic creates the account — not the
+  // doctors. Until the clinic has an admin screen, the demo receptionist is
+  // seeded here, and there is no public way to become one.
+  const [receptionistUser] = await db
+    .insert(users)
+    .values({ email: "receptionist@demo.com", passwordHash, role: "receptionist" })
+    .returning({ id: users.id });
+
+  await db.insert(receptionists).values({
+    userId: receptionistUser!.id,
+    fullName: "Meera Iyer",
+  });
 
   console.log("Creating doctors and availability…");
   const doctorIds: number[] = [];
   // The demo doctor's Friday stream, captured so the seed can book a visit in
   // it — a booked window is what the elastic-edit guards stand on.
   let fridayStreamId: number | undefined;
+  // The author recorded on the demo medical history, so the audit trail names
+  // a real account rather than a string with no profile behind it.
+  let demoDoctorUserId: number | undefined;
 
   for (const seed of DOCTORS) {
     const [user] = await db
       .insert(users)
       .values({ email: seed.email, passwordHash, role: "doctor" })
       .returning({ id: users.id });
+
+    if (seed.email === "doctor@demo.com") demoDoctorUserId = user!.id;
 
     const [doctor] = await db
       .insert(doctors)
@@ -304,33 +327,79 @@ async function main() {
     }
   }
 
-  console.log("Adding past appointments for history…");
   const daysAgo = (count: number) => {
     const date = new Date();
     date.setDate(date.getDate() - count);
     return localDate(date);
   };
 
-  await db.insert(appointments).values([
+  console.log("Adding medical history revisions…");
+  // Two snapshots, so the demo record already has an audit trail: the first
+  // visit recorded the allergy, the follow-up widened it and added medication.
+  await db.insert(medicalHistoryEntries).values([
     {
       patientId: patient!.id,
-      doctorId: doctorIds[0]!,
-      appointmentDate: daysAgo(3),
-      appointmentTime: "10:00",
-      seatNumber: 1,
-      status: "completed",
-      reason: "Routine cardiac check-up",
+      bloodGroup: "O+",
+      allergies: "Penicillin",
+      conditions: "Mild hypertension",
+      medications: null,
+      notes: "Prefers morning appointments.",
+      recordedByUserId: demoDoctorUserId ?? null,
+      recordedByName: "Aarav Mehta",
+      recordedByRole: "doctor",
+      createdAt: new Date(`${daysAgo(90)}T10:15:00+05:30`),
     },
     {
       patientId: patient!.id,
-      doctorId: doctorIds[0]!,
-      appointmentDate: daysAgo(5),
-      appointmentTime: "16:00",
-      seatNumber: 1,
-      status: "no_show",
-      reason: "Follow-up for palpitations",
+      bloodGroup: "O+",
+      allergies: "Penicillin, sulfa drugs",
+      conditions: "Mild hypertension",
+      medications: "Amlodipine 5 mg, once daily",
+      notes: "Prefers morning appointments.",
+      recordedByUserId: demoDoctorUserId ?? null,
+      recordedByName: "Aarav Mehta",
+      recordedByRole: "doctor",
+      createdAt: new Date(`${daysAgo(3)}T10:45:00+05:30`),
     },
   ]);
+
+  console.log("Adding past appointments for history…");
+  const pastVisits = await db
+    .insert(appointments)
+    .values([
+      {
+        patientId: patient!.id,
+        doctorId: doctorIds[0]!,
+        appointmentDate: daysAgo(3),
+        appointmentTime: "10:00",
+        seatNumber: 1,
+        status: "completed",
+        reason: "Routine cardiac check-up",
+      },
+      {
+        patientId: patient!.id,
+        doctorId: doctorIds[0]!,
+        appointmentDate: daysAgo(5),
+        appointmentTime: "16:00",
+        seatNumber: 1,
+        status: "no_show",
+        reason: "Follow-up for palpitations",
+      },
+    ])
+    .returning({ id: appointments.id, status: appointments.status });
+
+  const completedVisit = pastVisits.find((visit) => visit.status === "completed");
+  if (completedVisit) {
+    await db.insert(visitNotes).values({
+      appointmentId: completedVisit.id,
+      diagnosis: "Stable angina",
+      summary:
+        "Reviewed the recent episodes and today's ECG. No acute changes; the current medication is controlling symptoms.",
+      aftercare:
+        "Take Amlodipine at the same time each day. Avoid strenuous activity for 48 hours and return if chest pain worsens.",
+      followUpDays: 14,
+    });
+  }
 
   if (fridayStreamId) {
     console.log("Booking the demo patient into the Friday stream…");
@@ -363,8 +432,9 @@ async function main() {
   }
 
   console.log("Seed complete.");
-  console.log("  Patient  → patient@demo.com / password123");
-  console.log("  Doctor   → doctor@demo.com / password123");
+  console.log("  Patient     → patient@demo.com / password123");
+  console.log("  Doctor      → doctor@demo.com / password123");
+  console.log("  Receptionist→ receptionist@demo.com / password123");
 }
 
 main()

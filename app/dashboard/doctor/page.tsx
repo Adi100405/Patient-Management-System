@@ -1,3 +1,4 @@
+import Link from "next/link";
 import { and, asc, desc, eq, gt, gte, lt, ne, or, sql } from "drizzle-orm";
 import { AlertTriangle, Calendar, Clock, LogIn, Users } from "lucide-react";
 import { getDb } from "@/db";
@@ -46,6 +47,7 @@ const CLINIC_CANCEL_PREVIEW: CancelPreview = {
 
 type ScheduleRow = {
   readonly id: number;
+  readonly patientId: number;
   readonly date: string;
   readonly time: string;
   readonly status: AppointmentStatus;
@@ -99,7 +101,15 @@ function ScheduleItem({
           {initials(row.patientName)}
         </span>
         <div className="space-y-1">
-          <p className="font-semibold text-ink-900">{row.patientName}</p>
+          <div className="flex flex-wrap items-center gap-2">
+            <p className="font-semibold text-ink-900">{row.patientName}</p>
+            <Link
+              href={`/dashboard/doctor/patients/${row.patientId}`}
+              className="rounded-full border border-cream-300 px-2 py-0.5 text-[11px] font-medium text-teal-700 transition-colors hover:border-teal-300 hover:bg-teal-50"
+            >
+              Patient record
+            </Link>
+          </div>
           <div className="flex flex-wrap items-center gap-2">
             <span className="inline-flex items-center gap-1.5 rounded-full bg-cream-100 px-2.5 py-1 text-xs font-medium text-ink-700">
               <Calendar className="h-3.5 w-3.5 text-ink-500" />
@@ -147,6 +157,7 @@ export default async function DoctorDashboard() {
   const scheduleRows = await db
     .select({
       id: appointments.id,
+      patientId: appointments.patientId,
       date: appointments.appointmentDate,
       time: appointments.appointmentTime,
       status: appointments.status,
@@ -184,6 +195,7 @@ export default async function DoctorDashboard() {
   const needsRebookingRows = await db
     .select({
       id: appointments.id,
+      patientId: appointments.patientId,
       date: appointments.appointmentDate,
       time: appointments.appointmentTime,
       status: appointments.status,
@@ -209,6 +221,7 @@ export default async function DoctorDashboard() {
   const historyRows = await db
     .select({
       id: appointments.id,
+      patientId: appointments.patientId,
       date: appointments.appointmentDate,
       time: appointments.appointmentTime,
       status: appointments.status,
@@ -329,7 +342,7 @@ export default async function DoctorDashboard() {
         </div>
       </Card>
 
-      <QueueBoard date={now.date} rows={queueRows} />
+      <QueueBoard date={now.date} rows={queueRows} mode="doctor" />
 
       <Card>
         <CardHeader>

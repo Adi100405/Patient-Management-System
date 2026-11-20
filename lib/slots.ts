@@ -56,6 +56,15 @@ export function clinicClock(instant: Date = new Date()) {
   return toTime(clinicNow(instant).minutes);
 }
 
+/** An instant as clinic wall-clock, e.g. "19 Nov 2026, 4:05 pm". */
+export function formatClinicTimestamp(instant: Date) {
+  return new Intl.DateTimeFormat("en-IN", {
+    dateStyle: "medium",
+    timeStyle: "short",
+    timeZone: CLINIC_TIME_ZONE,
+  }).format(instant);
+}
+
 /** True once the slot has arrived in clinic time, so the visit can be resolved. */
 export function slotArrived(date: string, time: string, instant: Date = new Date()) {
   const now = clinicNow(instant);

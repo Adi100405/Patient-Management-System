@@ -14,7 +14,14 @@ import {
   uniqueIndex,
 } from "drizzle-orm/pg-core";
 
-export const roleEnum = pgEnum("role", ["patient", "doctor"]);
+/**
+ * Who can sign in.
+ *
+ * The receptionist is the front desk: they check patients in and mark the
+ * ones who never arrived, while the doctor calls them in and closes the
+ * visit. There is no public way to become one — a doctor sends an invitation.
+ */
+export const roleEnum = pgEnum("role", ["patient", "doctor", "receptionist"]);
 
 /**
  * How a schedule block turns its window into bookable positions.
@@ -119,6 +126,27 @@ export const doctors = pgTable("doctors", {
     .notNull()
     .default("0"),
   bio: text("bio"),
+});
+
+/**
+ * One front-desk account.
+ *
+ * A receptionist works the desk for the whole clinic: there is no clinic
+ * table and no per-doctor mapping, so one profile is enough. The account
+ * itself lives in `users` — the role is what makes it a receptionist, and
+ * this table is the desk-side profile behind that role.
+ *
+ * Staff accounts are created by the clinic, not by the doctors: there is no
+ * public signup for this role.
+ */
+export const receptionists = pgTable("receptionists", {
+  id: serial("id").primaryKey(),
+  userId: integer("user_id")
+    .notNull()
+    .unique()
+    .references(() => users.id, { onDelete: "cascade" }),
+  fullName: text("full_name").notNull(),
+  createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
 });
 
 /**
@@ -315,21 +343,29 @@ export const appointments = pgTable(
 );
 
 /**
- * Doctor-authored aftercare for a completed visit. One row per appointment,
+ * What the doctor records when a visit is completed. One row per appointment,
  * written at the moment the doctor resolves the visit.
  *
- * `aftercare` is medical content (PHI): it is shown **only** on the patient's
- * own dashboard and is never copied into an email or mobile message. The
- * follow-up loop links to it, it does not quote it.
+ * `diagnosis` is the short clinical conclusion and `summary` is what was found
+ * and done during the consultation. `aftercare` is the instruction the patient
+ * takes home, and `followUpDays` is the doctor's recommendation ("come back in
+ * two weeks").
  *
- * `followUpDays` is the doctor's recommendation ("come back in two weeks"). Null
- * means no follow-up was advised, and therefore no follow-up prompt is sent;
- * the loop stays silent rather than nagging on a guess.
+ * All four are medical content (PHI). They are shown **only** on the patient's
+ * own dashboard and the treating doctor's patient record, and are never copied
+ * into an email or mobile message. The follow-up loop links to the dashboard;
+ * it does not quote the notes.
+ *
+ * A null `followUpDays` means no follow-up was advised, and therefore no
+ * follow-up prompt is sent; the loop stays silent rather than nagging on a
+ * guess.
  */
 export const visitNotes = pgTable("visit_notes", {
   appointmentId: integer("appointment_id")
     .primaryKey()
     .references(() => appointments.id, { onDelete: "cascade" }),
+  diagnosis: text("diagnosis"),
+  summary: text("summary"),
   aftercare: text("aftercare"),
   followUpDays: integer("follow_up_days"),
   createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
@@ -337,6 +373,56 @@ export const visitNotes = pgTable("visit_notes", {
 });
 
 export type VisitNote = typeof visitNotes.$inferSelect;
+
+/**
+ * One saved revision of a patient's medical history.
+ *
+ * The table is append-only: a save inserts a complete snapshot, the newest row
+ * is the current record, and the older rows are the update history. There is no
+ * update or delete path in the app.
+ *
+ * That shape is deliberate. The Neon HTTP driver has no transactions, so a
+ * "current row plus audit row" pair could drift if the second write failed.
+ * One insert is one version, which makes the audit trail the only source of
+ * truth rather than a copy of it.
+ *
+ * `bloodGroup`, `allergies`, `conditions`, `medications` and `notes` are null
+ * when they were never recorded. Null is not the same as "none": the UI says
+ * "Not recorded" rather than implying a negative answer.
+ *
+ * The author is snapshotted by name and role so the audit still reads correctly
+ * if the doctor's profile is later renamed or deleted.
+ */
+export const medicalHistoryEntries = pgTable(
+  "medical_history_entries",
+  {
+    id: serial("id").primaryKey(),
+    patientId: integer("patient_id")
+      .notNull()
+      .references(() => patients.id, { onDelete: "cascade" }),
+    bloodGroup: text("blood_group"),
+    allergies: text("allergies"),
+    conditions: text("conditions"),
+    medications: text("medications"),
+    notes: text("notes"),
+    recordedByUserId: integer("recorded_by_user_id").references(() => users.id, {
+      onDelete: "set null",
+    }),
+    recordedByName: text("recorded_by_name").notNull(),
+    recordedByRole: text("recorded_by_role").notNull(),
+    createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+  },
+  (table) => [
+    /** The patient page reads the newest revision first, then the trail. */
+    index("medical_history_entries_patient_created_idx").on(
+      table.patientId,
+      table.createdAt,
+      table.id,
+    ),
+  ],
+);
+
+export type MedicalHistoryEntry = typeof medicalHistoryEntries.$inferSelect;
 
 export const payments = pgTable("payments", {
   id: serial("id").primaryKey(),

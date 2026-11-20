@@ -15,7 +15,7 @@ erDiagram
         int id PK
         string email UK
         string password_hash
-        enum role "DOCTOR | PATIENT"
+        enum role "DOCTOR | PATIENT | RECEPTIONIST"
         datetime created_at
     }
 
@@ -110,7 +110,8 @@ erDiagram
   `(doctor_id, appointment_date, appointment_time, seat_number)` where
   `status = 'booked'` — a cancelled row leaves the index, so its seat returns
   to the pool automatically.
-- **Status** covers the booking → cancel → complete/no-show lifecycle.
+- **Status** covers the booking → cancel → complete/no-show lifecycle, plus
+  `needs_rebooking` when a clinic schedule change leaves a visit without a slot.
 
 ## Other modules
 
@@ -118,7 +119,8 @@ erDiagram
 |---|---|
 | `payments` | One payment row per booking, from the moment the appointment exists |
 | `refunds` | The refund trail for a cancelled or failed payment |
-| `visit_notes` | Clinical notes and aftercare written after a visit |
+| `medical_history_entries` | Append-only revisions of a patient's standing medical record; the newest row is current |
+| `visit_notes` | Per-visit diagnosis, summary, aftercare and follow-up interval |
 | `reminders` | Scheduled appointment reminders |
 | `care_follow_ups` | Recommended follow-ups, and whether the patient has rebooked |
 | `notifications` | The durable notification ledger |

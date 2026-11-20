@@ -2,13 +2,14 @@ import { eq } from "drizzle-orm";
 import { cookies } from "next/headers";
 import { redirect } from "next/navigation";
 import { getDb } from "@/db";
-import { doctors, patients, users } from "@/db/schema";
+import { doctors, patients, receptionists, users } from "@/db/schema";
 import { isSessionStale } from "@/lib/password";
 import {
   SESSION_COOKIE,
   signSession,
   verifySession,
   type SessionPayload,
+  type SessionRole,
 } from "./jwt";
 
 export type { SessionPayload };
@@ -67,16 +68,18 @@ export async function requireSession() {
 
 /**
  * Guards a dashboard page and confirms the profile behind the token still exists.
- * A session whose doctor/patient row was deleted (for example after a database
- * reseed) is cleared instead of rendering an empty "ghost" dashboard.
+ * A session whose doctor/patient/receptionist row was deleted (for example after
+ * a database reseed) is cleared instead of rendering an empty "ghost" dashboard.
  */
-export async function requireRole(role: "patient" | "doctor") {
+export async function requireRole(role: SessionRole) {
   const session = await requireSession();
   if (session.role !== role) {
     redirect(`/dashboard/${session.role}`);
   }
 
   const db = getDb();
+  // One query per role: the profile behind the token is what the page is
+  // about, so its absence means the session is a ghost.
   const rows =
     role === "doctor"
       ? await db
@@ -84,11 +87,17 @@ export async function requireRole(role: "patient" | "doctor") {
           .from(doctors)
           .where(eq(doctors.id, session.profileId))
           .limit(1)
-      : await db
-          .select({ id: patients.id })
-          .from(patients)
-          .where(eq(patients.id, session.profileId))
-          .limit(1);
+      : role === "receptionist"
+        ? await db
+            .select({ id: receptionists.id })
+            .from(receptionists)
+            .where(eq(receptionists.id, session.profileId))
+            .limit(1)
+        : await db
+            .select({ id: patients.id })
+            .from(patients)
+            .where(eq(patients.id, session.profileId))
+            .limit(1);
 
   if (rows.length === 0) {
     // Cookie writes are not allowed while rendering, so a route handler clears
