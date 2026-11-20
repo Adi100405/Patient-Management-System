@@ -343,6 +343,10 @@ export async function resolveAppointment(
         eq(appointments.doctorId, session.profileId),
         eq(appointments.status, "booked"),
         or(
+          // A patient the desk checked in has arrived, whatever the clock says.
+          // The queue calls people in up to an hour before their slot, so the
+          // doctor can finish an early visit without waiting for its time.
+          isNotNull(appointments.checkedInAt),
           lt(appointments.appointmentDate, now.date),
           and(
             eq(appointments.appointmentDate, now.date),
@@ -439,6 +443,14 @@ export async function rescheduleAppointment(
   }
   if (appointment.status !== "booked" && appointment.status !== "needs_rebooking") {
     return { error: "Only live appointments can be rescheduled." };
+  }
+  // A patient who is at the desk has already been given a token and a place in
+  // the queue. Moving the visit underneath them would break both, so the
+  // clinic has to do it.
+  if (appointment.checkedInAt) {
+    return {
+      error: "You are checked in for this visit. Ask the clinic to move it for you.",
+    };
   }
   if (
     appointment.status === "booked" &&

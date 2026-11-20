@@ -1,15 +1,17 @@
-import { and, asc, desc, eq, gte, lt, ne, or, sql } from "drizzle-orm";
-import { AlertTriangle, Calendar, Clock, Users } from "lucide-react";
+import { and, asc, desc, eq, gt, gte, lt, ne, or, sql } from "drizzle-orm";
+import { AlertTriangle, Calendar, Clock, LogIn, Users } from "lucide-react";
 import { getDb } from "@/db";
 import { appointments, availability, patients } from "@/db/schema";
 import { AppointmentActions } from "@/components/appointment-actions";
 import { AssistantWidget } from "@/components/assistant/assistant-widget";
 import { AvailabilityManager, type AvailabilityRow } from "@/components/availability-manager";
 import { CancelAppointment } from "@/components/cancel-appointment";
+import { QueueBoard } from "@/components/queue-board";
 import { Badge } from "@/components/ui/badge";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { blocksForDoctor } from "@/lib/availability";
 import type { CancelPreview } from "@/lib/cancel-preview";
+import { doctorQueueForDate } from "@/lib/queue-data";
 import { requireRole } from "@/lib/session";
 import { visitWhenLabel } from "@/lib/schedule";
 import { clinicClock, clinicNow, slotArrived } from "@/lib/slots";
@@ -139,6 +141,9 @@ export default async function DoctorDashboard() {
   const now = clinicNow(instant);
   const nowTime = clinicClock(instant);
 
+  // Today's desk queue: who has arrived, who is waiting, who is in the room.
+  const queueRows = await doctorQueueForDate(session.profileId, now.date);
+
   const scheduleRows = await db
     .select({
       id: appointments.id,
@@ -163,7 +168,7 @@ export default async function DoctorDashboard() {
       and(
         eq(appointments.doctorId, session.profileId),
         eq(appointments.status, "booked"),
-        gte(appointments.appointmentDate, now.date),
+        gt(appointments.appointmentDate, now.date),
       ),
     )
     .orderBy(
@@ -239,6 +244,7 @@ export default async function DoctorDashboard() {
   const [stats] = await db
     .select({
       today: sql<number>`count(*) filter (where ${appointments.status} = 'booked' and ${appointments.appointmentDate} = ${now.date})::int`,
+      checkedIn: sql<number>`count(*) filter (where ${appointments.checkedInAt} is not null and ${appointments.appointmentDate} = ${now.date})::int`,
       upcoming: sql<number>`count(*) filter (where ${appointments.status} = 'booked' and (${appointments.appointmentDate} > ${now.date} or (${appointments.appointmentDate} = ${now.date} and ${appointments.appointmentTime} > ${nowTime})))::int`,
       patientsSeen: sql<number>`count(distinct ${appointments.patientId}) filter (where ${appointments.status} = 'completed')::int`,
       noShows: sql<number>`count(*) filter (where ${appointments.status} = 'no_show')::int`,
@@ -300,9 +306,10 @@ export default async function DoctorDashboard() {
       </div>
 
       <Card className="overflow-hidden">
-        <div className="grid grid-cols-2 divide-cream-200 sm:grid-cols-4 sm:divide-x">
+        <div className="grid grid-cols-2 divide-cream-200 sm:grid-cols-5 sm:divide-x">
           {[
             { label: "Today", value: stats.today, tone: "text-teal-800", icon: <Calendar className="h-4 w-4" /> },
+            { label: "Checked in", value: stats.checkedIn, tone: "text-teal-800", icon: <LogIn className="h-4 w-4" /> },
             { label: "Upcoming", value: stats.upcoming, tone: "text-ink-900", icon: <Clock className="h-4 w-4" /> },
             { label: "Patients seen", value: stats.patientsSeen, tone: "text-teal-800", icon: <Users className="h-4 w-4" /> },
             { label: "No-shows", value: stats.noShows, tone: "text-rose-700", icon: <AlertTriangle className="h-4 w-4" /> },
@@ -321,6 +328,8 @@ export default async function DoctorDashboard() {
           ))}
         </div>
       </Card>
+
+      <QueueBoard date={now.date} rows={queueRows} />
 
       <Card>
         <CardHeader>
@@ -363,10 +372,9 @@ export default async function DoctorDashboard() {
 
       <Card>
         <CardHeader>
-          <CardTitle>Schedule</CardTitle>
+          <CardTitle>Upcoming days</CardTitle>
           <p className="text-sm text-ink-500">
-            Booked visits from today onward. Once a visit has happened, mark it
-            completed or a no-show.
+            Booked visits from tomorrow onward. Today&rsquo;s visits live in the queue above.
           </p>
         </CardHeader>
         <CardContent className="space-y-3">

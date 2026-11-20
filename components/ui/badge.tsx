@@ -13,6 +13,10 @@ const badgeVariants = cva(
         completed: "bg-sky-50 text-sky-700 ring-sky-200",
         no_show: "bg-amber-50 text-amber-800 ring-amber-200",
         needs_rebooking: "bg-rose-50 text-rose-700 ring-rose-200",
+        /** Checked in and waiting for the doctor. */
+        waiting: "bg-amber-50 text-amber-800 ring-amber-200",
+        /** In the room right now. */
+        serving: "bg-teal-100 text-teal-900 ring-teal-300",
         outline: "bg-transparent text-ink-600 ring-cream-300",
       },
     },

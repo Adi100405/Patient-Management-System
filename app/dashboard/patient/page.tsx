@@ -12,11 +12,13 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { PaymentCheckout } from "@/components/payment-checkout";
 import { NotificationPreferences } from "@/components/notification-preferences";
+import { QueueStatus } from "@/components/queue-status";
 import { RefundStatusLine } from "@/components/refund-status";
 import { RescheduleAppointment, type RescheduleDayOption } from "@/components/reschedule-appointment";
 import { blocksForDoctors } from "@/lib/availability";
 import { describeCancellation } from "@/lib/cancel-preview";
 import { refundsForPatient } from "@/lib/refunds/queries";
+import { patientQueueStatus } from "@/lib/queue-data";
 import { preferencesForUser } from "@/lib/notifications/preferences";
 import { sweepReminders } from "@/lib/notifications/reminders";
 import { sweepCareFollowUps } from "@/lib/notifications/care";
@@ -93,6 +95,9 @@ export default async function PatientDashboard() {
       paymentProvider: payments.provider,
       paymentFailure: payments.failureReason,
       clinicMoved: appointments.clinicMoved,
+      checkedInAt: appointments.checkedInAt,
+      tokenNumber: appointments.tokenNumber,
+      servingStartedAt: appointments.servingStartedAt,
       aftercare: visitNotes.aftercare,
     })
     .from(appointments)
@@ -124,6 +129,9 @@ export default async function PatientDashboard() {
 
   const today = clinicNow().date;
   const upcoming = rows.filter((r) => r.status === "booked" && r.date >= today);
+  // Where this patient's own visit stands in the queue today: their token and
+  // their place, never anybody else's name.
+  const queueStatus = await patientQueueStatus(session.profileId, today);
   // A displaced visit with no slot is not history: the patient still owes the
   // clinic a decision, so it gets its own action card above the diary.
   const needsRebooking = rows.filter((r) => r.status === "needs_rebooking");
@@ -409,6 +417,13 @@ export default async function PatientDashboard() {
                         </span>
                         <PaymentChip row={row} />
                       </div>
+                      {row.date === today && (
+                        <QueueStatus
+                          status={queueStatus.get(row.id) ?? null}
+                          date={row.date}
+                          time={row.time}
+                        />
+                      )}
                       {row.reason && (
                         <p className="text-xs text-ink-500">
                           Reason: <span className="text-ink-700">{row.reason}</span>

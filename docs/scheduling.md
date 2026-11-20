@@ -176,6 +176,21 @@ of failing the whole edit.
 The planner lives in `lib/displacement.ts` — pure, like the rest of the domain —
 and the action is `updateAvailability` (`actions/availability.ts`).
 
+## Booking order and the desk queue are two different things
+
+`queue_since` is the order people **booked** a slot. It decides who is
+displaced first when a window is edited, and it is the `queue #2 of 5` the
+doctor sees for a day that has not started.
+
+`checked_in_at` is the order people **arrived**. It is the queue on the day:
+the desk board, the token on the slip, and the place in line a patient sees on
+their own dashboard. See [`queue.md`](queue.md).
+
+Neither is a stored rank that can go stale. The booking order is a comparison
+of timestamps, and the desk position is worked out from the check-in times
+every time the board is drawn, so a cancellation or a no-show closes the gap
+by itself.
+
 ## Where the code lives
 
 | File | What it holds |
@@ -189,6 +204,7 @@ and the action is `updateAvailability` (`actions/availability.ts`).
 | `actions/booking.ts` | Booking, rescheduling and cancellation, including clinic-moved refunds and needs-rebooking recovery |
 | `db/schema.ts` | `scheduling_type`, `capacity`, `availability_dates`, `seat_number`, `queue_since`, `clinic_moved`, the seat index and the schedule audit tables |
 | `db/migrate.ts` | The additive migration for this schema, plus the ownership repair that keeps the app's role able to write |
+| `docs/queue.md` | The desk queue: check-in, tokens, and who is seen in which order |
 
 `lib/schedule.ts` has no database access at all — it is pure functions over
 plain data, which is why the rules can be tested without a database.

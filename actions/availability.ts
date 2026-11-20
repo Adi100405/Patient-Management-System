@@ -447,7 +447,15 @@ export async function updateAvailability(
   if (freedIds.length > 0) {
     const rows = await db
       .update(appointments)
-      .set({ status: "needs_rebooking", clinicMoved: true })
+      .set({
+        status: "needs_rebooking",
+        clinicMoved: true,
+        // The visit has lost its slot, so any check-in, token and place in the
+        // queue belong to the day it was booked for, not to this one.
+        checkedInAt: null,
+        tokenNumber: null,
+        servingStartedAt: null,
+      })
       .where(
         and(
           inArray(appointments.id, freedIds),
@@ -468,6 +476,9 @@ export async function updateAvailability(
 
   for (const placement of changed) {
     if (placement.outcome === "retimed" && placement.to) {
+      // A visit that changes day is a visit the patient has not arrived for,
+      // whatever the old day said. The check-in goes with the old day.
+      const changedDay = placement.from.date !== placement.to.date;
       const rows = await db
         .update(appointments)
         .set({
@@ -475,6 +486,9 @@ export async function updateAvailability(
           appointmentTime: placement.to.time,
           availabilityId: placement.to.availabilityId,
           clinicMoved: true,
+          ...(changedDay
+            ? { checkedInAt: null, tokenNumber: null, servingStartedAt: null }
+            : {}),
         })
         .where(
           and(

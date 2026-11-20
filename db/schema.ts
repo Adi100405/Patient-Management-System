@@ -193,6 +193,24 @@ export type AvailabilityDate = typeof availabilityDates.$inferSelect;
  */
 export const BOOKED_SEAT_INDEX = "appointments_booked_seat_unique";
 
+/**
+ * One token per doctor per clinic day.
+ *
+ * A token is the number on the slip a patient is given at the desk. It is
+ * stable for the whole day: a patient who cancels never hands their number to
+ * somebody else, because the number is a fact about their arrival, not a
+ * counter of who is still waiting.
+ */
+export const DOCTOR_DAY_TOKEN_INDEX = "appointments_doctor_day_token_unique";
+
+/**
+ * One patient being seen at a time.
+ *
+ * Only booked visits count, so finishing or cancelling the patient in the room
+ * hands the room to the next one without anybody having to release it.
+ */
+export const DOCTOR_DAY_SERVING_INDEX = "appointments_doctor_day_serving_unique";
+
 export const appointments = pgTable(
   "appointments",
   {
@@ -231,6 +249,25 @@ export const appointments = pgTable(
      * cancellation can still be recognised as a clinic-moved booking.
      */
     clinicMoved: boolean("clinic_moved").notNull().default(false),
+    /**
+     * When the patient arrived at the clinic desk and was checked in.
+     *
+     * `null` means "has not arrived yet". The check-in is written once: the
+     * write is guarded on this column still being null, so a double click or
+     * two desks racing cannot check the same patient in twice.
+     */
+    checkedInAt: timestamp("checked_in_at", { withTimezone: true }),
+    /**
+     * The clinic token this patient was given when they checked in: a small
+     * number for the doctor's day. One token per doctor per day.
+     */
+    tokenNumber: integer("token_number"),
+    /**
+     * When the doctor called this patient in. Exactly one booked visit per
+     * doctor per day can be in the room, which is what "the patient being seen
+     * right now" means.
+     */
+    servingStartedAt: timestamp("serving_started_at", { withTimezone: true }),
     reason: text("reason"),
     createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
   },
@@ -255,6 +292,24 @@ export const appointments = pgTable(
       table.appointmentTime,
       table.queueSince,
       table.id,
+    ),
+    /** A token is handed out once per doctor per clinic day. */
+    uniqueIndex(DOCTOR_DAY_TOKEN_INDEX)
+      .on(table.doctorId, table.appointmentDate, table.tokenNumber)
+      .where(sql`${table.tokenNumber} is not null`),
+    /** One patient in the room at a time per doctor per clinic day. */
+    uniqueIndex(DOCTOR_DAY_SERVING_INDEX)
+      .on(table.doctorId, table.appointmentDate)
+      .where(sql`${table.servingStartedAt} is not null and ${table.status} = 'booked'`),
+    /** The live queue for one doctor on one day, in check-in order. */
+    index("appointments_doctor_day_checkin_idx").on(
+      table.doctorId,
+      table.appointmentDate,
+      table.checkedInAt,
+    ),
+    check(
+      "appointments_token_positive",
+      sql`${table.tokenNumber} is null or ${table.tokenNumber} >= 1`,
     ),
   ],
 );
