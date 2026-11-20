@@ -38,6 +38,31 @@ Null means **not recorded**, and is kept distinct from an empty string. The UI
 renders it as "Not recorded", never as "No known allergies" or "None". An
 unrecorded field must not read as a clinical negative.
 
+## Visit details
+
+The medical record is the standing context; `visit_notes` is what happened at a
+specific consultation. One row per completed appointment carries four optional
+fields:
+
+| Field | Meaning |
+|---|---|
+| `diagnosis` | the short clinical conclusion |
+| `summary` | what was found and done during the consultation |
+| `aftercare` | the instructions the patient takes home |
+| `follow_up_days` | the recommended interval before the next visit |
+
+The doctor fills them in from the Complete action on the queue or the
+appointment row. They are written only after the appointment has moved to
+`completed`, so a no-show leaves no clinical note behind.
+
+All four are patient-visible: the doctor's patient record shows them in the
+visit history, and the patient's own dashboard shows them under **Completed
+visits**. They are never copied into an email, SMS, notification, receipt or the
+assistant.
+
+A null field means the doctor did not record it. The UI omits it rather than
+showing an empty heading.
+
 ## Access
 
 | Role | Read | Write |

@@ -13,7 +13,12 @@ import { getPaymentProvider, PAYMENT_HOLD_MINUTES } from "@/lib/payments";
 import { refundForCancellation, type RefundOutcome } from "@/lib/refunds/service";
 import { takenSeatNumbers } from "@/lib/seats";
 import { requireSession } from "@/lib/session";
-import { normalizeAftercare, normalizeFollowUpDays } from "@/lib/visit-notes";
+import {
+  normalizeAftercare,
+  normalizeDiagnosis,
+  normalizeFollowUpDays,
+  normalizeVisitSummary,
+} from "@/lib/visit-notes";
 import {
   blockAppliesOn,
   positionsFor,
@@ -374,17 +379,19 @@ export async function resolveAppointment(
     return { error: "That visit has not taken place yet." };
   }
 
-  // Aftercare is recorded only for a completed visit, and only once the status
-  // transition has succeeded — a no-show leaves no care note behind.
+  // Visit details are recorded only for a completed visit, and only once the
+  // status transition has succeeded — a no-show leaves no clinical note behind.
   if (intent.data === "complete") {
+    const diagnosis = normalizeDiagnosis(formData.get("diagnosis"));
+    const summary = normalizeVisitSummary(formData.get("summary"));
     const aftercare = normalizeAftercare(formData.get("aftercare"));
     const followUpDays = normalizeFollowUpDays(formData.get("followUpDays"));
     await db
       .insert(visitNotes)
-      .values({ appointmentId: id, aftercare, followUpDays })
+      .values({ appointmentId: id, diagnosis, summary, aftercare, followUpDays })
       .onConflictDoUpdate({
         target: visitNotes.appointmentId,
-        set: { aftercare, followUpDays, updatedAt: new Date() },
+        set: { diagnosis, summary, aftercare, followUpDays, updatedAt: new Date() },
       });
   }
 

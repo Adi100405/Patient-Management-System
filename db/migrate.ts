@@ -186,6 +186,18 @@ const STATEMENTS: readonly string[] = [
      created_at timestamptz not null default now()
    )`,
 
+  // Visit notes gained a diagnosis and a consultation summary. The base table
+  // is created too, so the migration also repairs a database that predates it.
+  `create table if not exists visit_notes (
+     appointment_id integer primary key references appointments(id) on delete cascade,
+     aftercare text,
+     follow_up_days integer,
+     created_at timestamptz not null default now(),
+     updated_at timestamptz not null default now()
+   )`,
+  `alter table visit_notes add column if not exists diagnosis text`,
+  `alter table visit_notes add column if not exists summary text`,
+
   // Medical history is an append-only log of full snapshots. The newest row is
   // the current record; older rows are the audit trail. No update or delete
   // statement is ever issued against this table.

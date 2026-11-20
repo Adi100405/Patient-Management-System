@@ -6,14 +6,16 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
+import { MAX_DIAGNOSIS_LENGTH, MAX_SUMMARY_LENGTH } from "@/lib/visit-notes";
 
 /**
  * Complete / No-show controls for a booked visit whose slot has arrived.
  *
- * Completing a visit can carry care forward: an optional aftercare note the
- * patient sees on their dashboard, and an optional follow-up interval that
- * schedules a gentle nudge later. Both are optional, so a plain "complete"
- * stays one click — the care fields only appear once the doctor asks for them.
+ * Completing a visit can carry the clinical record forward: an optional
+ * diagnosis and visit summary the patient sees in their visit history, an
+ * aftercare note, and a follow-up interval that schedules a gentle nudge later.
+ * All of them are optional, so a plain "complete" stays one click — the detail
+ * fields only appear once the doctor asks for them.
  */
 export function AppointmentActions({ appointmentId }: { appointmentId: number }) {
   const [state, formAction, pending] = useActionState<ResolveState, FormData>(
@@ -45,10 +47,35 @@ export function AppointmentActions({ appointmentId }: { appointmentId: number })
   return (
     <form
       action={formAction}
-      className="w-72 space-y-3 rounded-xl border border-cream-200 bg-white p-3.5 text-left"
+      className="w-80 space-y-3 rounded-xl border border-cream-200 bg-white p-3.5 text-left"
     >
       <input type="hidden" name="appointmentId" value={appointmentId} />
       <input type="hidden" name="intent" value="complete" />
+
+      <div className="space-y-1.5">
+        <Label htmlFor={`diagnosis-${appointmentId}`}>Diagnosis</Label>
+        <Input
+          id={`diagnosis-${appointmentId}`}
+          name="diagnosis"
+          maxLength={MAX_DIAGNOSIS_LENGTH}
+          placeholder="e.g. Stable angina"
+        />
+        <p className="text-xs text-ink-500">
+          Optional. Shown to the patient in their visit history.
+        </p>
+      </div>
+
+      <div className="space-y-1.5">
+        <Label htmlFor={`summary-${appointmentId}`}>Visit summary</Label>
+        <Textarea
+          id={`summary-${appointmentId}`}
+          name="summary"
+          rows={2}
+          maxLength={MAX_SUMMARY_LENGTH}
+          placeholder="What was found and done during the consultation…"
+        />
+        <p className="text-xs text-ink-500">Optional. Also shown to the patient.</p>
+      </div>
 
       <div className="space-y-1.5">
         <Label htmlFor={`aftercare-${appointmentId}`}>Aftercare instructions</Label>
