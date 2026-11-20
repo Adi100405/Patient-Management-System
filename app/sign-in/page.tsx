@@ -37,6 +37,7 @@ export default async function SignInPage({
         <p className="font-medium text-ink-700">Demo accounts (after seeding)</p>
         <p className="mt-1">Patient: patient@demo.com · password123</p>
         <p>Doctor: doctor@demo.com · password123</p>
+        <p>Receptionist: receptionist@demo.com · password123</p>
       </div>
     </div>
   );

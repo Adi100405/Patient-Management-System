@@ -4,16 +4,17 @@ import { useActionState, useState } from "react";
 import {
   callNextPatient,
   checkInAppointment,
+  markNoShowAtDesk,
   type QueueActionState,
 } from "@/actions/checkin";
 import { Button } from "@/components/ui/button";
 
 /**
- * The two buttons that move the queue.
+ * The buttons that move the queue.
  *
- * Both are client components because the desk needs to see the button working
- * straight away: a check-in that looks like it did nothing is worse than one
- * that says it did nothing.
+ * They are client components because the desk needs to see the button
+ * working straight away: a check-in that looks like it did nothing is worse
+ * than one that says it did nothing.
  */
 export function CheckInButton({ appointmentId }: { appointmentId: number }) {
   const [state, formAction, pending] = useActionState<QueueActionState, FormData>(
@@ -66,5 +67,29 @@ export function CallNextButton({ disabled }: { disabled: boolean }) {
       </Button>
       {state?.error && <p className="text-xs text-rose-600">{state.error}</p>}
     </div>
+  );
+}
+
+/**
+ * Records that a patient never turned up.
+ *
+ * This is the front desk's own outcome, for a visit whose slot time has
+ * passed and which nobody ever checked in. A patient who did check in and
+ * then left is the doctor's to close.
+ */
+export function NoShowButton({ appointmentId }: { appointmentId: number }) {
+  const [state, formAction, pending] = useActionState<QueueActionState, FormData>(
+    markNoShowAtDesk,
+    null,
+  );
+
+  return (
+    <form action={formAction} className="flex flex-col items-end gap-1">
+      <input type="hidden" name="appointmentId" value={appointmentId} />
+      <Button variant="outline" size="sm" type="submit" disabled={pending}>
+        {pending ? "Saving…" : "No-show"}
+      </Button>
+      {state?.error && <p className="text-xs text-rose-600">{state.error}</p>}
+    </form>
   );
 }

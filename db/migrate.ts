@@ -173,6 +173,18 @@ const STATEMENTS: readonly string[] = [
      on schedule_change_moves (change_id)`,
   `create index if not exists schedule_change_moves_appointment_idx
      on schedule_change_moves (appointment_id)`,
+
+  // The front desk: a third role and the profile behind it. The role value
+  // has to exist before a receptionist can sign in; the table does not depend
+  // on it, so this order is safe inside the one transaction the whole
+  // migration runs in.
+  `alter type role add value if not exists 'receptionist'`,
+  `create table if not exists receptionists (
+     id serial primary key,
+     user_id integer not null unique references users(id) on delete cascade,
+     full_name text not null,
+     created_at timestamptz not null default now()
+   )`,
 ];
 
 async function columnExists(table: string, column: string) {

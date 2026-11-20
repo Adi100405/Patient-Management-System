@@ -14,7 +14,14 @@ import {
   uniqueIndex,
 } from "drizzle-orm/pg-core";
 
-export const roleEnum = pgEnum("role", ["patient", "doctor"]);
+/**
+ * Who can sign in.
+ *
+ * The receptionist is the front desk: they check patients in and mark the
+ * ones who never arrived, while the doctor calls them in and closes the
+ * visit. There is no public way to become one — a doctor sends an invitation.
+ */
+export const roleEnum = pgEnum("role", ["patient", "doctor", "receptionist"]);
 
 /**
  * How a schedule block turns its window into bookable positions.
@@ -119,6 +126,27 @@ export const doctors = pgTable("doctors", {
     .notNull()
     .default("0"),
   bio: text("bio"),
+});
+
+/**
+ * One front-desk account.
+ *
+ * A receptionist works the desk for the whole clinic: there is no clinic
+ * table and no per-doctor mapping, so one profile is enough. The account
+ * itself lives in `users` — the role is what makes it a receptionist, and
+ * this table is the desk-side profile behind that role.
+ *
+ * Staff accounts are created by the clinic, not by the doctors: there is no
+ * public signup for this role.
+ */
+export const receptionists = pgTable("receptionists", {
+  id: serial("id").primaryKey(),
+  userId: integer("user_id")
+    .notNull()
+    .unique()
+    .references(() => users.id, { onDelete: "cascade" }),
+  fullName: text("full_name").notNull(),
+  createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
 });
 
 /**

@@ -1,6 +1,6 @@
 import { Check, CircleSlash, Clock, LogIn, Users } from "lucide-react";
 import { AppointmentActions } from "@/components/appointment-actions";
-import { CallNextButton, CheckInButton } from "@/components/queue-actions";
+import { CallNextButton, CheckInButton, NoShowButton } from "@/components/queue-actions";
 import { Badge } from "@/components/ui/badge";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { buildQueue, checkInWindow, formatClinicTime } from "@/lib/queue";
@@ -15,8 +15,20 @@ import { formatTime } from "@/lib/utils";
  * out every time the board is drawn, so a cancellation or a no-show closes the
  * gap by itself — there is no stored rank that can go stale. Tokens are the
  * opposite: they stay with the patient for the whole day.
+ *
+ * The board has two faces. The doctor calls people in and closes the visit;
+ * the front desk checks them in and closes the visits that were never
+ * attended. The mode decides which buttons each of them gets.
  */
-export function QueueBoard({ date, rows }: { date: string; rows: readonly DoctorQueueRow[] }) {
+export function QueueBoard({
+  date,
+  rows,
+  mode,
+}: {
+  date: string;
+  rows: readonly DoctorQueueRow[];
+  mode: "doctor" | "reception";
+}) {
   const view = buildQueue(rows);
   const byId = new Map(rows.map((row) => [row.id, row]));
 
@@ -30,7 +42,9 @@ export function QueueBoard({ date, rows }: { date: string; rows: readonly Doctor
           <div>
             <CardTitle>Today&rsquo;s queue</CardTitle>
             <p className="text-sm text-ink-500">
-              Patients in the order they checked in. Call one in when you are ready.
+              {mode === "doctor"
+                ? "Patients in the order they checked in. Call one in when you are ready."
+                : "Patients in the order they checked in. Check them in as they arrive."}
             </p>
           </div>
           <div className="flex flex-wrap items-center gap-2 text-xs text-ink-600">
@@ -79,15 +93,17 @@ export function QueueBoard({ date, rows }: { date: string; rows: readonly Doctor
               </div>
               <div className="flex items-center gap-2">
                 <Badge variant="serving">Being seen</Badge>
-                <AppointmentActions appointmentId={serving.id} />
+                {mode === "doctor" && <AppointmentActions appointmentId={serving.id} />}
               </div>
             </div>
           ) : (
             <div className="flex flex-col gap-3 rounded-xl border border-dashed border-cream-300 bg-cream-50/60 p-4 sm:flex-row sm:items-center sm:justify-between">
               <p className="text-sm text-ink-600">
-                Nobody is in the room. Call the next patient in when you are ready.
+                {mode === "doctor"
+                  ? "Nobody is in the room. Call the next patient in when you are ready."
+                  : "Nobody is in the room. The doctor calls the next patient in."}
               </p>
-              <CallNextButton disabled={view.waiting.length === 0} />
+              {mode === "doctor" && <CallNextButton disabled={view.waiting.length === 0} />}
             </div>
           )}
         </section>
@@ -130,7 +146,7 @@ export function QueueBoard({ date, rows }: { date: string; rows: readonly Doctor
                   </div>
                   <div className="flex items-center gap-2">
                     <Badge variant="waiting">Token {entry.token ?? "—"}</Badge>
-                    {slotArrived(date, entry.appointmentTime) && (
+                    {mode === "doctor" && slotArrived(date, entry.appointmentTime) && (
                       <AppointmentActions appointmentId={entry.id} />
                     )}
                   </div>
@@ -187,8 +203,14 @@ export function QueueBoard({ date, rows }: { date: string; rows: readonly Doctor
                       </div>
                     </div>
                     <div className="flex items-center gap-2">
-                      {arrived && <AppointmentActions appointmentId={entry.id} />}
-                      {window.state === "open" && <CheckInButton appointmentId={entry.id} />}
+                      {mode === "doctor" ? (
+                        arrived && <AppointmentActions appointmentId={entry.id} />
+                      ) : (
+                        <>
+                          {window.state === "open" && <CheckInButton appointmentId={entry.id} />}
+                          {arrived && <NoShowButton appointmentId={entry.id} />}
+                        </>
+                      )}
                     </div>
                   </li>
                 );
